@@ -1,0 +1,8 @@
+Eventos de AlAnguloTV: plugin de Kino.
+Copyright 2026 Gerardo Ibarra
+
+Distribuido bajo la Apache License, Version 2.0. Ver el archivo LICENSE.
+
+Este plugin incluye material de kinotvapp/kino-plugin-own-server
+(carpeta sdk/, kino.d.ts y contract.json), Copyright 2026 kinotvapp,
+distribuido bajo la misma licencia.

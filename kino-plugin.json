@@ -1,0 +1,30 @@
+{
+  "id": "events-from-alangulotv",
+  "name": "Eventos de AlAnguloTV",
+  "version": "0.1.0",
+  "apiVersion": 6,
+  "entry": "plugin.js",
+  "description": "Eventos deportivos en vivo de la agenda de alangulotv",
+  "hosts": [
+    "alangulotv.sx",
+    "*.alangulotv.sx",
+    "spf24live.st",
+    "*.spf24live.st",
+    "latamzy.com",
+    "*.latamzy.com",
+    "sudamericafy.com",
+    "*.sudamericafy.com"
+  ],
+  "capabilities": [
+    "home",
+    "resolve"
+  ],
+  "browser": true,
+  "streamHosts": "any",
+  "categories": [
+    "live"
+  ],
+  "discoverable": false,
+  "color": "#FFB020",
+  "icon": "icon.png"
+}
