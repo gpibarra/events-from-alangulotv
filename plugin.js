@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.4.0";
+export const VERSION = "0.4.1";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const MAX_FILAS = 20;
@@ -103,33 +103,6 @@ export async function home() {
   const tz = zonaHoraria();
   const grupos = agruparPorCompeticion(await cargarAgenda());
   return grupos.slice(0, MAX_FILAS).map((g) => filaDeGrupo(g, tz));
-}
-
-// Sección propia (chip arriba de Inicio en el celular): pestaña "Todos" con una fila por competición y una
-// pestaña por cada competición (Kino admite 8 pestañas como máximo).
-const MAX_PESTANAS = 8;
-export async function section({ tab }) {
-  const tz = zonaHoraria();
-  const grupos = agruparPorCompeticion(await cargarAgenda());
-  const tabs = [
-    { id: "todos", label: texto("Todos", "All") },
-    ...grupos.slice(0, MAX_PESTANAS - 1).map((g) => ({ id: g.id, label: g.titulo.slice(0, 24) })),
-  ];
-  const grupo = grupos.find((g) => g.id === tab);
-  const elegida = grupo ? tab : "todos";
-  const rows = grupo ? [filaDeGrupo(grupo, tz)] : grupos.slice(0, MAX_FILAS).map((g) => filaDeGrupo(g, tz));
-  return {
-    tabs,
-    tab: elegida,
-    hero: {
-      title: texto("Eventos en vivo", "Live events"),
-      text: texto(
-        `Agenda de alangulotv. Horas en UTC${tz >= 0 ? "+" : "−"}${Math.abs(tz)}; puedes cambiar la zona en los ajustes del plugin.`,
-        `alangulotv schedule. Times in UTC${tz >= 0 ? "+" : "−"}${Math.abs(tz)}; you can change the zone in the plugin settings.`,
-      ),
-    },
-    rows,
-  };
 }
 
 // Pestaña "En vivo": cada competición es una categoría y sus eventos son los canales.
