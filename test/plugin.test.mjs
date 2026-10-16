@@ -8,6 +8,7 @@ let capturas = [];
 
 globalThis.kino = {
   lang: "es-CO",
+  log: () => {},
   error: (code, message, options) => Object.assign(new Error(message), { code, options }),
   fetch: async (url, options) => {
     pedidos.push({ url, options });
@@ -30,7 +31,7 @@ globalThis.kino = {
   },
 };
 
-const { home, resolve, parsearAgenda, BASE } = await import("../plugin.js");
+const { home, resolve, parsearAgenda, liveCategories, liveChannels, BASE } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
 
 test("parsearAgenda: eventos, hora, tipo y embeds decodificados", () => {
@@ -56,7 +57,6 @@ test("home: una fila por evento, ítems live con ids válidos y únicos", async 
   assert.equal(new Set(ids).size, ids.length);
   for (const id of [...ids, ...filas.map((f) => f.id)]) assert.match(id, /^[A-Za-z0-9._~-]{1,128}$/);
   assert.ok(filas.every((f) => f.items.every((i) => i.kind === "live" && i.ref.startsWith("https://"))));
-  assert.ok(filas.every((f) => f.genre === "deportes" && f.items.every((i) => i.genres[0] === "deportes")));
   assert.equal(filas[0].title, "00:00 · Liga Profesional: Huracán vs Gimnasia La Plata");
 });
 
@@ -85,4 +85,16 @@ test("el dominio de BASE está declarado en los hosts del manifiesto", () => {
 test("package.json y kino-plugin.json tienen la misma versión", () => {
   const paquete = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(paquete.version, manifiesto.version);
+});
+
+test("En vivo: una categoría por evento y sus opciones como canales", async () => {
+  const cats = await liveCategories();
+  assert.equal(cats.length, 3);
+  assert.ok(cats.every((c) => c.genre === "deportes" && /^[A-Za-z0-9._~-]{1,128}$/.test(c.id)));
+  const { items } = await liveChannels({ categoryId: cats[0].id });
+  assert.deepEqual(items.map((i) => i.title), [
+    "TNT Sports Calidad 720p", "TNT Sports Op2 Calidad 720p", "TNT Sports Op3 Calidad 720p",
+  ]);
+  assert.ok(items.every((i) => i.categoryId === cats[0].id && i.ref.startsWith("https://")));
+  assert.deepEqual((await liveChannels({ categoryId: "no-existe" })).items, []);
 });

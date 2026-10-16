@@ -16,26 +16,52 @@ const EXTRACTORES = {
   "sudamericafy.com": extraerPorRed,
 };
 
-export async function home() {
+async function cargarAgenda() {
   const r = await kino.fetch(AGENDA, { headers: { Referer: BASE + "/" } });
   if (!r.ok) throw kino.error("unavailable", "la agenda respondió " + r.status);
-  return parsearAgenda(r.text())
-    .filter((e) => e.opciones.length)
-    .slice(0, MAX_FILAS)
-    .map((e) => ({
-      id: "ev-" + hash(e.evento),
-      genre: "deportes",
-      title: (e.hora ? e.hora + " · " : "") + e.evento,
-      items: e.opciones.map((o) => ({
-        id: "op-" + hash(o.embed),
-        ref: o.embed,
-        title: o.texto,
-        kind: "live",
-        overview: e.evento,
-        genres: ["deportes"],
-        badges: e.tipo ? [e.tipo] : undefined,
-      })),
-    }));
+  return parsearAgenda(r.text()).filter((e) => e.opciones.length);
+}
+
+const idEvento = (e) => "ev-" + hash(e.evento);
+const idOpcion = (o) => "op-" + hash(o.embed);
+const tituloEvento = (e) => (e.hora ? e.hora + " · " : "") + e.evento;
+
+// Inicio: una fila por evento, con una tarjeta live por cada opción de señal.
+export async function home() {
+  const eventos = await cargarAgenda();
+  return eventos.slice(0, MAX_FILAS).map((e) => ({
+    id: idEvento(e),
+    title: tituloEvento(e),
+    items: e.opciones.map((o) => ({
+      id: idOpcion(o),
+      ref: o.embed,
+      title: o.texto,
+      kind: "live",
+      overview: e.evento,
+      badges: e.tipo ? [e.tipo] : undefined,
+    })),
+  }));
+}
+
+// Pestaña "En vivo": cada evento es una categoría y sus opciones son los canales.
+export async function liveCategories() {
+  const eventos = await cargarAgenda();
+  return eventos.slice(0, 200).map((e) => ({ id: idEvento(e), title: tituloEvento(e), genre: "deportes" }));
+}
+
+export async function liveChannels({ categoryId }) {
+  const eventos = await cargarAgenda();
+  const evento = eventos.find((e) => idEvento(e) === categoryId);
+  if (!evento) return { items: [] };
+  return {
+    items: evento.opciones.map((o, i) => ({
+      id: idOpcion(o),
+      title: o.texto,
+      ref: o.embed,
+      categoryId,
+      number: i + 1,
+    })),
+  };
 }
 
 export async function resolve(ref) {
@@ -46,6 +72,7 @@ export async function resolve(ref) {
   } catch {
     throw kino.error("not_found", "ref inválido");
   }
+  kino.log("resolve", embed.hostname);
   const extraer = EXTRACTORES[embed.hostname] ?? extraerPorRed;
   return extraer(embed.href);
 }
@@ -61,12 +88,14 @@ async function extraerPorRed(embed) {
       match: "\\.m3u8",
     });
   } catch (e) {
+    kino.log("captura falló", new URL(embed).hostname, e.code, e.message);
     throw kino.error("unavailable", "captura " + (e.code || "falló"), {
       userMessage: String(kino.lang).startsWith("en")
         ? "This signal could not be opened right now. Try another option of the event."
         : "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
     });
   }
+  kino.log("captura ok", new URL(embed).hostname, captura.media.length + " medios");
   const medio = captura.media.find((m) => /\.m3u8/i.test(m.url)) ?? captura.media[0];
   if (!medio) throw kino.error("not_found", "la página no pidió video");
   return { url: medio.url, mime: MIME_HLS, headers: medio.headers };

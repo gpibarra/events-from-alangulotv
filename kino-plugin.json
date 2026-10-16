@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -17,7 +17,8 @@
   ],
   "capabilities": [
     "home",
-    "resolve"
+    "resolve",
+    "channels"
   ],
   "browser": true,
   "streamHosts": "any",

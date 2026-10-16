@@ -1,6 +1,6 @@
 {
   "name": "events-from-alangulotv",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agenda de eventos deportivos en vivo de alangulotv: plugin de Kino y CLI para extraer los m3u8",
   "private": true,
   "type": "module",
