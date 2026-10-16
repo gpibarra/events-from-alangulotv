@@ -39,6 +39,11 @@ globalThis.kino = {
     if (url.startsWith("https://spf24live.st/")) {
       return { ok: true, status: 200, text: () => (url.includes("sin-iframe") ? "<html></html>" : '<iframe src="https://missflight.net/e/abc123" width="100%"></iframe>') };
     }
+    if (url.startsWith("https://streamtp99a.sbs/") || url.startsWith("https://la18hd.su/")) {
+      // Solo el stream "directo" trae playbackURL; los demás hacen caer al navegador oculto.
+      const html = url.endsWith("stream=directo") ? 'var playbackURL = "https:\\/\\/99.cdn.example:443\\/global\\/directo\\/index.m3u8?token=t&ip=1.2.3.4";' : "<html></html>";
+      return { ok: true, status: 200, text: () => html };
+    }
     if (url.startsWith("https://missflight.net/")) {
       return { ok: true, status: 200, text: () => `<script id="config">window._econfig='${cifrarEconfig({ stream_url: "https://c089pa.ejemplo.net:8443/hls/x.m3u8?s=t&e=1" })}';</script>` };
     }
@@ -63,7 +68,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, iconosDeAgenda, etiquetasDelSitio, descifrarEconfig, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, iconosDeAgenda, etiquetasDelSitio, descifrarEconfig, SERVIDORES, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -200,7 +205,23 @@ test("resolve de un evento: prueba las señales en el orden de la agenda y deja 
   assert.ok(s.alternatives.every((a) => a.ref.startsWith("https://") && a.ref.length <= 512));
 });
 
-test("resolve de una señal por navegador: devuelve el m3u8 capturado con sus headers", async () => {
+test("resolve directo: latamzy y sudamericafy van al reproductor sin navegador y desescapan playbackURL", async () => {
+  for (const [embed, host] of [
+    ["https://latamzy.com/global1.php?stream=directo", "streamtp99a.sbs"],
+    ["https://sudamericafy.com/global1.php?stream=directo", "la18hd.su"],
+  ]) {
+    capturas = [];
+    pedidos.length = 0;
+    const s = await resolve(embed);
+    assert.equal(capturas.length, 0, embed);
+    assert.equal(s.url, "https://99.cdn.example:443/global/directo/index.m3u8?token=t&ip=1.2.3.4");
+    assert.equal(new URL(pedidos[0].url).hostname, host);
+    assert.ok(manifiesto.hosts.includes(host) && manifiesto.hosts.includes("*." + host), host + " falta en hosts");
+  }
+  assert.equal(pedidos[0].options.headers["Sec-Fetch-Dest"], "iframe"); // la18hd.su solo responde a un iframe
+});
+
+test("resolve: si el método directo falla, cae al navegador y devuelve el m3u8 capturado con sus headers", async () => {
   capturas = [];
   const s = await resolve("https://latamzy.com/global1.php?stream=tntsports");
   assert.deepEqual(capturas[0].options.headers, { Referer: BASE + "/" });
@@ -257,6 +278,37 @@ test("descifrarEconfig: recupera el JSON y rechaza basura", () => {
   const config = { stream_url: "https://h.example/a.m3u8", p2p: true };
   assert.deepEqual(descifrarEconfig(cifrarEconfig(config)), config);
   assert.throws(() => descifrarEconfig(btoa("corto")));
+});
+
+test("servidor no soportado: se descarta sin intentarlo, queda en el log y, si son todas, el mensaje pide avisar al autor", async () => {
+  capturas = [];
+  pedidos.length = 0;
+  const registro = [];
+  const log = kino.log;
+  kino.log = (...a) => registro.push(a.join(" "));
+  try {
+    await assert.rejects(resolve("https://servidornuevo.com/embed.php?stream=x"), (e) => e.code === "not_found" && /no conoce/.test(e.options.userMessage));
+    assert.equal(capturas.length + pedidos.length, 0, "no intenta abrirlo");
+    assert.ok(registro.some((l) => l.includes("servidor no soportado: servidornuevo.com")));
+    // todas desconocidas: el mensaje de servidor nuevo
+    const soloNuevas = "ev:" + JSON.stringify([{ n: "A", e: "https://nuevo1.com/x" }, { n: "B", e: "https://nuevo2.com/y" }]);
+    await assert.rejects(resolve(soloNuevas), (e) => e.code === "not_found" && /no conoce/.test(e.options.userMessage));
+    // mezcladas con una que falla: el mensaje de siempre
+    const mezcla = "ev:" + JSON.stringify([{ n: "A", e: "https://nuevo1.com/x" }, { n: "B", e: "https://latamzy.com/falla" }]);
+    await assert.rejects(resolve(mezcla), (e) => e.code === "unavailable" && /ninguna señal/.test(e.options.userMessage));
+    // y si otra anda, se usa sin aviso
+    const conBuena = "ev:" + JSON.stringify([{ n: "A", e: "https://nuevo1.com/x" }, { n: "B", e: "https://latamzy.com/global1.php?stream=directo" }]);
+    assert.equal((await resolve(conBuena)).label, "B");
+  } finally {
+    kino.log = log;
+  }
+});
+
+test("cada servidor soportado está en los hosts del manifiesto, con y sin *.", () => {
+  for (const h of SERVIDORES) {
+    assert.ok(manifiesto.hosts.includes(h), h + " falta en hosts");
+    assert.ok(manifiesto.hosts.includes("*." + h), "*." + h + " falta en hosts");
+  }
 });
 
 test("resolve: errores tipados y ref inválido", async () => {
@@ -330,7 +382,7 @@ test("resolve por id: relee la agenda y usa las señales de ese momento", async 
     capturas = [];
     const s = await resolve(saudi.ref);
     assert.ok(pedidos.length > antes, "debe volver a pedir la agenda");
-    assert.equal(pedidos.at(-1).url, BASE + "/agenda.php");
+    assert.ok(pedidos.slice(antes).some((p) => p.url === BASE + "/agenda.php"), "debe volver a pedir la agenda");
     assert.equal(new URL(capturas[0].url).hostname, "sudamericafy.com");
     assert.equal(s.label, "Fox Deportes Calidad 720p");
     assert.equal(s.alternatives.length, 1);

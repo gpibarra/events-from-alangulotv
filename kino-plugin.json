@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.7.6",
+  "version": "0.7.7",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -15,7 +15,11 @@
     "latamzy.com",
     "*.latamzy.com",
     "sudamericafy.com",
-    "*.sudamericafy.com"
+    "*.sudamericafy.com",
+    "streamtp99a.sbs",
+    "*.streamtp99a.sbs",
+    "la18hd.su",
+    "*.la18hd.su"
   ],
   "capabilities": [
     "home",

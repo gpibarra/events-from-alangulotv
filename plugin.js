@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.6";
+export const VERSION = "0.7.7";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -28,18 +28,43 @@ const TZ_POR_DEFECTO = -3; // Argentina
 // Un evento "ya terminó" cuando pasaron DURACION horas desde su inicio (ajuste "duracion"); los terminados van al final.
 const DURACION_POR_DEFECTO = 3;
 
-// Un extractor por dominio del embed. Si el método de uno cambia, se escribe otra función con la
-// misma firma (embed) => Stream y se apunta aquí. Las señales de un evento se prueban en el orden en que las trae la
-// agenda. Un dominio sin entrada usa extraerPorRed().
+// Cada dominio de embed tiene una lista de métodos que se prueban en orden: el primero que devuelve un Stream gana y,
+// si uno falla, se pasa al siguiente. Si el método de un servidor cambia, se escribe otra función con la firma
+// (embed) => Stream y se agrega a su lista. Las señales de un evento se prueban en el orden en que las trae la agenda.
+// Un dominio sin entrada es un servidor que el plugin no conoce: ni kino.fetch ni el navegador oculto pueden abrirlo
+// (no está en los hosts del manifiesto), así que se descarta sin intentarlo. Cada dominio de aquí debe estar en
+// "hosts" de kino-plugin.json (un test lo comprueba).
 const EXTRACTORES = {
-  // spf24live.st no se abre en el navegador oculto: su iframe (missflight.net) rechaza el User-Agent del WebView de
-  // Android ("; wv") con "domain protected". Se lee con kino.fetch y se descifra la configuración del reproductor.
-  "spf24live.st": { extraer: extraerSpf24 },
-  "latamzy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
-  "sudamericafy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
+  // spf24live.st: su iframe (missflight.net) rechaza el User-Agent del WebView de Android ("; wv") con "domain protected",
+  // así que el navegador oculto nunca sirve. Se lee con kino.fetch y se descifra la configuración del reproductor.
+  "spf24live.st": [metodo("descifrado", extraerSpf24)],
+  // latamzy.com y sudamericafy.com arman con un script ofuscado un iframe a un reproductor que trae el m3u8 en texto
+  // plano (`playbackURL`). Se va directo a ese reproductor; si su dominio cambió, queda el navegador oculto.
+  "latamzy.com": [
+    metodo("directo", extraerPlayback((stream) => "https://streamtp99a.sbs/global1.php?stream=" + stream)),
+    metodo("navegador", extraerPorRed({ referer: BASE + "/" })),
+  ],
+  "sudamericafy.com": [
+    metodo("directo", extraerPlayback((stream) => "https://la18hd.su/vivo/canales.php?stream=" + stream, {
+      Referer: "https://sudamericafy.com/", // la18hd.su solo responde a una carga que parece un iframe
+      "Sec-Fetch-Dest": "iframe",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "cross-site",
+    })),
+    metodo("navegador", extraerPorRed({ referer: BASE + "/" })),
+  ],
 };
-const POR_DEFECTO = { extraer: extraerPorRed() };
-const extractorDe = (embed) => EXTRACTORES[new URL(embed).hostname] ?? POR_DEFECTO;
+export const SERVIDORES = Object.keys(EXTRACTORES);
+
+const MENSAJE_SERVIDOR_NUEVO = () =>
+  texto(
+    "Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.",
+    "This event uses a server the plugin does not know yet. Tell the author and share the debug mode log.",
+  );
+
+function metodo(nombre, extraer) {
+  return { nombre, extraer };
+}
 
 const texto = (es, en) => (String(kino.lang).startsWith("en") ? en : es);
 
@@ -341,6 +366,7 @@ async function resolverEventoLegado(ref) {
 // (menú "Servidor"): Kino las resuelve solo si la persona las elige o si esta falla.
 async function resolverSenales(lista) {
   const senales = lista.map((s) => ({ n: s.n.slice(0, 48), e: s.e }));
+  let desconocidas = 0;
   for (const [i, senal] of senales.entries()) {
     try {
       const stream = await resolverSenal(senal.e);
@@ -350,8 +376,12 @@ async function resolverSenales(lista) {
         alternatives: senales.filter((_, j) => j !== i).map((s) => ({ label: s.n, ref: s.e })),
       };
     } catch (e) {
+      if (e.servidorDesconocido) desconocidas++;
       kino.log("señal descartada", new URL(senal.e).hostname, e.code);
     }
+  }
+  if (desconocidas === senales.length) {
+    throw kino.error("not_found", "todas las señales son de servidores no soportados", { userMessage: MENSAJE_SERVIDOR_NUEVO() });
   }
   throw kino.error("unavailable", "ninguna señal respondió", {
     userMessage: texto(
@@ -370,14 +400,49 @@ async function resolverSenal(ref) {
     throw kino.error("not_found", "ref inválido");
   }
   kino.log("resolve v" + VERSION, embed.hostname);
-  return extractorDe(embed.href).extraer(embed.href);
+  const metodos = EXTRACTORES[embed.hostname];
+  if (!metodos) {
+    // Se registra para que llegue al autor por el registro del modo debug.
+    kino.log("servidor no soportado: " + embed.hostname, embed.href);
+    const error = kino.error("not_found", "servidor no soportado: " + embed.hostname, { userMessage: MENSAJE_SERVIDOR_NUEVO() });
+    error.servidorDesconocido = true;
+    throw error;
+  }
+  let ultimo;
+  for (const { nombre, extraer } of metodos) {
+    try {
+      const stream = await extraer(embed.href);
+      kino.log("método ok", embed.hostname, nombre);
+      return stream;
+    } catch (e) {
+      kino.log("método falló", embed.hostname, nombre, e.code, e.message);
+      ultimo = e;
+    }
+  }
+  throw ultimo;
+}
+
+// Método "directo": el reproductor de algunos servidores trae el m3u8 en texto plano (`var playbackURL = "…"`).
+// `urlDe` arma la dirección del reproductor a partir del parámetro `stream` del embed.
+const UA_CHROME_MOVIL = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+
+function extraerPlayback(urlDe, headers = {}) {
+  return async (embed) => {
+    const stream = new URL(embed).searchParams.get("stream");
+    if (!stream) throw kino.error("not_found", "el embed no trae stream");
+    const reproductor = urlDe(stream);
+    const r = await kino.fetch(reproductor, { headers: { "User-Agent": UA_CHROME_MOVIL, ...headers } });
+    if (!r.ok) throw kino.error("unavailable", new URL(reproductor).hostname + " respondió " + r.status);
+    const url = /playbackURL\s*=\s*["']([^"']+)["']/.exec(await r.text())?.[1]?.replace(/\\\//g, "/");
+    if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", new URL(reproductor).hostname + " sin playbackURL");
+    return { url, mime: MIME_HLS, headers: { "User-Agent": UA_CHROME_MOVIL } };
+  };
 }
 
 // Método "spf24live": la página solo trae un iframe a missflight.net, que sirve el reproductor si su Referer es
 // spf24live.st y el User-Agent es el de un Chrome (no un WebView). El iframe guarda el m3u8 en window._econfig:
 // base64 de cuatro trozos iguales, cada uno base64 con un carácter de relleno en la posición 3, que unidos en el
 // orden 1, 3, 0, 2 son el base64 de un JSON con `stream_url`. Los segmentos piden Referer missflight.net.
-const UA_CHROME = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
 const ORDEN_ECONFIG = [1, 3, 0, 2];
 
 export function descifrarEconfig(econfig) {
@@ -393,7 +458,7 @@ export function descifrarEconfig(econfig) {
 
 async function extraerSpf24(embed) {
   const pedir = async (url, referer) => {
-    const r = await kino.fetch(url, { headers: { Referer: referer, "User-Agent": UA_CHROME } });
+    const r = await kino.fetch(url, { headers: { Referer: referer, "User-Agent": UA_CHROME_MOVIL } });
     if (!r.ok) throw kino.error("unavailable", new URL(url).hostname + " respondió " + r.status);
     return r.text();
   };
@@ -412,7 +477,7 @@ async function extraerSpf24(embed) {
   const url = config.stream_url || config.stream_url_nop2p;
   if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", "la configuración no trae stream_url");
   kino.log("spf24live ok", new URL(iframe).hostname, new URL(url).hostname);
-  return { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": UA_CHROME } };
+  return { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": UA_CHROME_MOVIL } };
 }
 
 // Método "red": la página arma el reproductor con sus scripts, así que se abre oculta y se toma la
