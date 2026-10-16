@@ -8,11 +8,16 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.5.0";
+export const VERSION = "0.6.0";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const MAX_FILAS = 20;
-const PREFIJO_EVENTO = "ev:";
+// El ref de un canal es solo el id del evento: resolve vuelve a leer la agenda y usa las señales de ese
+// momento, así un evento que el sitio listó sin enlaces funciona en cuanto los publica.
+const PREFIJO_EVENTO = "evt:";
+// Formato anterior (0.5.x y antes): llevaba las señales copiadas en JSON. Kino puede conservar filas
+// guardadas con ese ref hasta 6 h, así que se sigue entendiendo.
+const PREFIJO_LEGADO = "ev:";
 
 // Las horas de la agenda vienen en UTC+1: el /hora.js del sitio las pasa a la zona del visitante con
 // hora_local = hora + (UTC_del_visitante - 1). El ajuste "tz" (kino-plugin.json) es esa zona.
@@ -40,7 +45,8 @@ const texto = (es, en) => (String(kino.lang).startsWith("en") ? en : es);
 async function cargarAgenda() {
   const r = await kino.fetch(AGENDA, { headers: { Referer: BASE + "/" } });
   if (!r.ok) throw kino.error("unavailable", "la agenda respondió " + r.status);
-  return parsearAgenda(r.text()).filter((e) => e.opciones.length);
+  // El sitio lista los eventos del día antes de tener sus enlaces: se devuelven todos, también los de 0 señales.
+  return parsearAgenda(r.text());
 }
 
 // "Copa Libertadores: Estudiantes LP vs Flamengo" -> { competicion, partido }. Sin ":", la
@@ -80,11 +86,11 @@ export function convertirHora(hhmm, tz) {
 const idEvento = (e) => "ev-" + hash(e.evento);
 const tituloEvento = (e, tz) => {
   const hora = convertirHora(e.hora, tz);
-  return (hora ? hora + " · " : "") + e.partido;
+  const aviso = e.opciones.length ? "" : texto(" (sin señal aún)", " (no signal yet)");
+  return (hora ? hora + " · " : "") + e.partido + aviso;
 };
 
-// El ref del canal lleva todas sus señales, para resolver sin volver a pedir la agenda.
-const refEvento = (e) => PREFIJO_EVENTO + JSON.stringify(e.opciones.map((o) => ({ n: o.texto, e: o.embed })));
+const refEvento = (e) => PREFIJO_EVENTO + idEvento(e);
 
 const itemEvento = (e, tz) => ({
   id: idEvento(e),
@@ -138,12 +144,22 @@ export const AJUSTES_A_VACIAR = ["forzar"];
 export async function action(key) {
   if (key !== "actualizar") return { message: texto("Listo", "Done") };
   const eventos = await cargarAgenda();
+  const conSenal = eventos.filter((e) => e.opciones.length).length;
   const competiciones = agruparPorCompeticion(eventos).length;
-  kino.log("actualización forzada v" + VERSION, eventos.length + " eventos", competiciones + " competiciones");
+  kino.log("actualización forzada v" + VERSION, eventos.length + " eventos", conSenal + " con señal");
+  // Sin eventos no hay nada que refrescar: no se vacía nada y se avisa.
+  if (!eventos.length) {
+    return {
+      message: texto(
+        "No hay eventos en la agenda de hoy. El sitio aún no los publicó.",
+        "There are no events in today's schedule. The site has not published them yet.",
+      ),
+    };
+  }
   return {
     message: texto(
-      `Agenda leída: ${eventos.length} eventos en ${competiciones} competiciones. Kino volverá a pedirla.`,
-      `Schedule read: ${eventos.length} events in ${competiciones} competitions. Kino will ask for it again.`,
+      `Agenda leída: ${eventos.length} eventos (${conSenal} con señal) en ${competiciones} competiciones. Kino volverá a pedirla.`,
+      `Schedule read: ${eventos.length} events (${conSenal} with a signal) in ${competiciones} competitions. Kino will ask for it again.`,
     ),
     clearSettings: AJUSTES_A_VACIAR,
   };
@@ -153,19 +169,47 @@ export async function action(key) {
 
 export async function resolve(ref) {
   await Promise.resolve(); // Kino 0.9.49 y anteriores no atajan un throw antes del primer await
-  return ref.startsWith(PREFIJO_EVENTO) ? resolverEvento(ref) : resolverSenal(ref);
+  if (ref.startsWith(PREFIJO_EVENTO)) return resolverEventoPorId(ref.slice(PREFIJO_EVENTO.length));
+  if (ref.startsWith(PREFIJO_LEGADO)) return resolverEventoLegado(ref);
+  return resolverSenal(ref);
 }
 
-// Un evento: prueba sus señales por prioridad y devuelve la primera que anda. Las demás van como copias
-// con etiqueta (menú "Servidor"): Kino las resuelve solo si la persona las elige o si esta falla.
-async function resolverEvento(ref) {
+// Un evento por su id: relee la agenda y resuelve las señales que tiene ahora.
+async function resolverEventoPorId(id) {
+  const evento = (await cargarAgenda()).find((e) => idEvento(e) === id);
+  if (!evento) {
+    throw kino.error("not_found", "el evento ya no está en la agenda", {
+      userMessage: texto("Este evento ya no está en la agenda.", "This event is no longer in the schedule."),
+    });
+  }
+  if (!evento.opciones.length) {
+    kino.log("evento sin señales", evento.tipo);
+    throw kino.error("not_found", "el evento no tiene señales todavía", {
+      userMessage: texto(
+        "Todavía no hay señal para este evento. Prueba más tarde.",
+        "There is no signal for this event yet. Try again later.",
+      ),
+    });
+  }
+  return resolverSenales(evento.opciones.map((o) => ({ n: o.texto, e: o.embed })));
+}
+
+// Ref de versiones anteriores: las señales vienen copiadas en el propio ref.
+async function resolverEventoLegado(ref) {
   let senales;
   try {
-    senales = JSON.parse(ref.slice(PREFIJO_EVENTO.length)).map((s) => ({ n: String(s.n).slice(0, 48), e: String(s.e) }));
+    senales = JSON.parse(ref.slice(PREFIJO_LEGADO.length)).map((s) => ({ n: String(s.n), e: String(s.e) }));
     if (!senales.length) throw new Error("sin señales");
   } catch {
     throw kino.error("not_found", "ref de evento inválido");
   }
+  return resolverSenales(senales);
+}
+
+// Prueba las señales por prioridad y devuelve la primera que anda. Las demás van como copias con etiqueta
+// (menú "Servidor"): Kino las resuelve solo si la persona las elige o si esta falla.
+async function resolverSenales(lista) {
+  const senales = lista.map((s) => ({ n: s.n.slice(0, 48), e: s.e }));
   senales.sort((a, b) => prioridadDe(a.e) - prioridadDe(b.e));
   for (const [i, senal] of senales.entries()) {
     try {

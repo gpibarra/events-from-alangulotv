@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const agenda = readFileSync(new URL("./agenda.fixture.html", import.meta.url), "utf8");
+// Una agenda real de otro día: 15 eventos, de los que solo 1 tiene señales (el sitio las publica de a poco).
+const agendaSinSenales = readFileSync(new URL("./agenda-sin-senales.fixture.html", import.meta.url), "utf8");
+const agendaVacia = "<ul class=\"menu\"><b>Agenda - Viernes</b></ul>";
+let agendaActiva = agenda;
 const pedidos = [];
 let capturas = [];
 let ajustes = {};
@@ -16,7 +20,7 @@ globalThis.kino = {
   fetch: async (url, options) => {
     pedidos.push({ url, options });
     if (fallaAgenda) return { ok: false, status: 503, text: () => "" };
-    return { ok: true, status: 200, text: () => agenda };
+    return { ok: true, status: 200, text: () => agendaActiva };
   },
   browser: {
     capture: async (url, options) => {
@@ -92,7 +96,7 @@ test("home: una fila por competición con un canal live por evento", async () =>
   assert.equal(items.length, 3);
   assert.equal(new Set(items.map((i) => i.id)).size, 3);
   for (const id of [...items.map((i) => i.id), ...filas.map((f) => f.id)]) assert.match(id, ID_VALIDO);
-  assert.ok(items.every((i) => i.kind === "live" && i.ref.startsWith("ev:") && i.ref.length < 4096));
+  assert.ok(items.every((i) => i.kind === "live" && i.ref.startsWith("evt:") && i.ref.length < 64));
   assert.equal(items[0].title, "20:00 · Huracán vs Gimnasia La Plata"); // UTC-3 por defecto
 });
 
@@ -120,7 +124,7 @@ test("action actualizar: lee la agenda y vacía solo la bandera `forzar`, nunca 
   const r = await action("actualizar");
   assert.deepEqual(r.clearSettings, ["forzar"]);
   assert.ok(!r.clearSettings.includes("tz") && !AJUSTES_A_VACIAR.includes("tz"));
-  assert.match(r.message, /3 eventos en 3 competiciones/);
+  assert.match(r.message, /3 eventos \(3 con señal\) en 3 competiciones/);
   assert.ok(r.message.length <= 300);
 });
 
@@ -151,7 +155,7 @@ test("En vivo: una categoría por competición y un canal por evento", async () 
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "20:00 · Huracán vs Gimnasia La Plata");
   assert.equal(items[0].categoryId, cats[0].id);
-  assert.match(items[0].ref, /^ev:/);
+  assert.match(items[0].ref, /^evt:/);
   assert.deepEqual((await liveChannels({ categoryId: "no-existe" })).items, []);
 });
 
@@ -168,7 +172,7 @@ test("resolve de un evento: prueba primero las señales que andan y deja spf24li
   assert.ok(s.alternatives.every((a) => a.ref.startsWith("https://") && a.ref.length <= 512));
 });
 
-test("resolve de un evento: si una señal falla pasa a la siguiente", async () => {
+test("resolve de un ref anterior (JSON): si una señal falla pasa a la siguiente", async () => {
   capturas = [];
   const ref = "ev:" + JSON.stringify([
     { n: "Rota", e: "https://latamzy.com/falla" },
@@ -180,7 +184,7 @@ test("resolve de un evento: si una señal falla pasa a la siguiente", async () =
   assert.deepEqual(s.alternatives.map((a) => a.label), ["Rota"]);
 });
 
-test("resolve de un evento: si ninguna señal anda, error con mensaje para la persona", async () => {
+test("resolve de un ref anterior (JSON): si ninguna señal anda, error con mensaje para la persona", async () => {
   const ref = "ev:" + JSON.stringify([{ n: "Rota", e: "https://latamzy.com/falla" }]);
   await assert.rejects(resolve(ref), (e) => e.code === "unavailable" && !!e.options.userMessage);
 });
@@ -221,4 +225,80 @@ test("package.json y kino-plugin.json tienen la misma versión", () => {
 
 test("VERSION de plugin.js coincide con kino-plugin.json", () => {
   assert.equal(VERSION, manifiesto.version);
+});
+
+test("agenda con eventos sin señal: se muestran todos, con aviso, y solo los que tienen señal son abribles", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    ajustes = {};
+    const filas = await home();
+    const items = filas.flatMap((f) => f.items);
+    assert.equal(items.length, 15);
+    assert.equal(new Set(items.map((i) => i.id)).size, 15);
+    assert.equal(items.filter((i) => i.title.endsWith("(sin señal aún)")).length, 14);
+    const saudi = items.find((i) => i.title.includes("Al Quadisiya"));
+    assert.equal(saudi.title, "10:15 · Al Quadisiya vs Abha"); // 14:15 UTC+1 -> UTC-3
+    assert.ok(!saudi.title.includes("sin señal"));
+    assert.ok(filas.length <= 20);
+    const cats = await liveCategories();
+    assert.equal(cats.length, filas.length);
+  } finally {
+    agendaActiva = agenda;
+  }
+});
+
+test("resolve por id: relee la agenda y usa las señales de ese momento", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    const saudi = (await home()).flatMap((f) => f.items).find((i) => i.title.includes("Al Quadisiya"));
+    const antes = pedidos.length;
+    capturas = [];
+    const s = await resolve(saudi.ref);
+    assert.ok(pedidos.length > antes, "debe volver a pedir la agenda");
+    assert.equal(pedidos.at(-1).url, BASE + "/agenda.php");
+    assert.equal(new URL(capturas[0].url).hostname, "sudamericafy.com");
+    assert.equal(s.label, "Fox Deportes Calidad 720p");
+    assert.equal(s.alternatives.length, 1);
+  } finally {
+    agendaActiva = agenda;
+  }
+});
+
+test("resolve por id: un evento sin señal responde con un mensaje claro y no abre el navegador", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    const sin = (await home()).flatMap((f) => f.items).find((i) => i.title.includes("Sport Huancayo"));
+    capturas = [];
+    await assert.rejects(resolve(sin.ref), (e) => e.code === "not_found" && /Todavía no hay señal/.test(e.options.userMessage));
+    assert.equal(capturas.length, 0);
+  } finally {
+    agendaActiva = agenda;
+  }
+});
+
+test("resolve por id: un evento que ya no está en la agenda -> not_found con mensaje", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    const item = (await home()).flatMap((f) => f.items)[0];
+    agendaActiva = agenda; // al día siguiente el evento ya no existe
+    await assert.rejects(resolve(item.ref), (e) => e.code === "not_found" && !!e.options.userMessage);
+  } finally {
+    agendaActiva = agenda;
+  }
+});
+
+test("action: con eventos sin señal los cuenta; con la agenda vacía avisa y no vacía nada", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    const r = await action("actualizar");
+    assert.match(r.message, /15 eventos \(1 con señal\)/);
+    assert.deepEqual(r.clearSettings, ["forzar"]);
+    agendaActiva = agendaVacia;
+    const v = await action("actualizar");
+    assert.match(v.message, /No hay eventos en la agenda de hoy/);
+    assert.equal(v.clearSettings, undefined);
+    assert.deepEqual(await home(), []);
+  } finally {
+    agendaActiva = agenda;
+  }
 });

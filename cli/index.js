@@ -16,5 +16,10 @@ for (const urlIframe of parsearIframes(html, URL_INICIAL)) {
 
 const unicos = [...new Map(links.map((l) => [`${l.evento}|${l.url}`, l])).values()];
 
+if (unicos.length === 0) {
+  console.error(`No se encontraron links "${PREFIJO}*": la agenda está vacía o cambió. No se tocó output/links.json.`);
+  process.exit(1);
+}
+
 await writeFile('output/links.json', JSON.stringify(unicos, null, 2));
 console.log(`Listo: ${unicos.length} links "${PREFIJO}*" guardados en output/links.json`);
