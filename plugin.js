@@ -4,16 +4,21 @@
 // Único lugar con el dominio de la agenda. Si cambia, se cambia aquí y en "hosts" de kino-plugin.json
 // (un JSON no puede leerlo; un test comprueba que ambos coincidan).
 export const BASE = "https://alangulotv.sx";
+// Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
+// cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
+export const VERSION = "0.2.1";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const MAX_FILAS = 20;
 
 // Un extractor por dominio del embed. Si el método de uno cambia, se escribe otra función con la
-// misma firma (embed) => Stream y se apunta aquí. Un dominio sin entrada usa extraerPorRed.
+// misma firma (embed) => Stream y se apunta aquí. Un dominio sin entrada usa extraerPorRed().
 const EXTRACTORES = {
-  "spf24live.st": extraerPorRed,
-  "latamzy.com": extraerPorRed,
-  "sudamericafy.com": extraerPorRed,
+  // Sin Referer a propósito: el iframe de missflight.net solo sirve el reproductor si su Referer es
+  // spf24live.st; un Referer puesto a la primera carga se le pasa también y responde "NOT ALLOWED".
+  "spf24live.st": extraerPorRed(),
+  "latamzy.com": extraerPorRed({ referer: BASE + "/" }),
+  "sudamericafy.com": extraerPorRed({ referer: BASE + "/" }),
 };
 
 async function cargarAgenda() {
@@ -72,33 +77,37 @@ export async function resolve(ref) {
   } catch {
     throw kino.error("not_found", "ref inválido");
   }
-  kino.log("resolve", embed.hostname);
-  const extraer = EXTRACTORES[embed.hostname] ?? extraerPorRed;
+  kino.log("resolve v" + VERSION, embed.hostname);
+  const extraer = EXTRACTORES[embed.hostname] ?? extraerPorRed();
   return extraer(embed.href);
 }
 
 // Método "red": la página arma el reproductor con sus scripts, así que se abre oculta y se toma la
 // petición .m3u8. Los headers que devuelve (Referer, User-Agent…) hay que pasarlos al reproductor.
-async function extraerPorRed(embed) {
-  let captura;
-  try {
-    captura = await kino.browser.capture(embed, {
-      headers: { Referer: BASE + "/" },
-      timeoutMs: 20000,
-      match: "\\.m3u8",
-    });
-  } catch (e) {
-    kino.log("captura falló", new URL(embed).hostname, e.code, e.message);
-    throw kino.error("unavailable", "captura " + (e.code || "falló"), {
-      userMessage: String(kino.lang).startsWith("en")
-        ? "This signal could not be opened right now. Try another option of the event."
-        : "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
-    });
-  }
-  kino.log("captura ok", new URL(embed).hostname, captura.media.length + " medios");
-  const medio = captura.media.find((m) => /\.m3u8/i.test(m.url)) ?? captura.media[0];
-  if (!medio) throw kino.error("not_found", "la página no pidió video");
-  return { url: medio.url, mime: MIME_HLS, headers: medio.headers };
+// `referer` es opcional: solo para los embeds que lo exigen en la primera carga.
+function extraerPorRed({ referer } = {}) {
+  return async (embed) => {
+    const host = new URL(embed).hostname;
+    let captura;
+    try {
+      captura = await kino.browser.capture(embed, {
+        ...(referer ? { headers: { Referer: referer } } : {}),
+        timeoutMs: 20000,
+        match: "\\.m3u8",
+      });
+    } catch (e) {
+      kino.log("captura falló", host, e.code, e.message);
+      throw kino.error("unavailable", "captura " + (e.code || "falló"), {
+        userMessage: String(kino.lang).startsWith("en")
+          ? "This signal could not be opened right now. Try another option of the event."
+          : "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
+      });
+    }
+    kino.log("captura ok", host, captura.media.length + " medios");
+    const medio = captura.media.find((m) => /\.m3u8/i.test(m.url)) ?? captura.media[0];
+    if (!medio) throw kino.error("not_found", "la página no pidió video");
+    return { url: medio.url, mime: MIME_HLS, headers: medio.headers };
+  };
 }
 
 // agenda.php: <li class="TIPO"><a href="#">Evento <span class="t">hora</span></a><ul>

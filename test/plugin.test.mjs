@@ -31,7 +31,7 @@ globalThis.kino = {
   },
 };
 
-const { home, resolve, parsearAgenda, liveCategories, liveChannels, BASE } = await import("../plugin.js");
+const { home, resolve, parsearAgenda, liveCategories, liveChannels, BASE, VERSION } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
 
 test("parsearAgenda: eventos, hora, tipo y embeds decodificados", () => {
@@ -70,6 +70,12 @@ test("resolve: abre el embed con Referer y devuelve el m3u8 con sus headers", as
   assert.deepEqual(s.headers, { Referer: "https://p.example/", "User-Agent": "UA" });
 });
 
+test("resolve: spf24live.st no manda Referer (su iframe lo rechazaría)", async () => {
+  capturas = [];
+  await resolve("https://spf24live.st/channels/ch8.php");
+  assert.equal(capturas[0].options.headers, undefined);
+});
+
 test("resolve: errores tipados y ref inválido", async () => {
   await assert.rejects(resolve("https://latamzy.com/falla"), (e) => e.code === "unavailable" && !!e.options.userMessage);
   await assert.rejects(resolve("https://latamzy.com/vacio"), (e) => e.code === "not_found");
@@ -97,4 +103,8 @@ test("En vivo: una categoría por evento y sus opciones como canales", async () 
   ]);
   assert.ok(items.every((i) => i.categoryId === cats[0].id && i.ref.startsWith("https://")));
   assert.deepEqual((await liveChannels({ categoryId: "no-existe" })).items, []);
+});
+
+test("VERSION de plugin.js coincide con kino-plugin.json", () => {
+  assert.equal(VERSION, manifiesto.version);
 });
