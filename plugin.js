@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.0";
+export const VERSION = "0.7.1";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -46,11 +46,15 @@ const texto = (es, en) => (String(kino.lang).startsWith("en") ? en : es);
 
 // --- Agenda: competiciones y eventos --------------------------------------------------------------
 
-async function cargarAgenda() {
+async function pedirAgenda() {
   const r = await kino.fetch(AGENDA, { headers: { Referer: BASE + "/" } });
   if (!r.ok) throw kino.error("unavailable", "la agenda respondió " + r.status);
-  // El sitio lista los eventos del día antes de tener sus enlaces: se devuelven todos, también los de 0 señales.
-  return parsearAgenda(r.text());
+  return r.text();
+}
+
+// El sitio lista los eventos del día antes de tener sus enlaces: se devuelven todos, también los de 0 señales.
+async function cargarAgenda() {
+  return parsearAgenda(await pedirAgenda());
 }
 
 // "Copa Libertadores: Estudiantes LP vs Flamengo" -> { competicion, partido }. Sin ":", la
@@ -148,6 +152,7 @@ const itemEvento = (e, tz, conCompeticion = false) => ({
   kind: "live",
   overview: e.evento,
   badges: e.tipo ? [e.tipo] : undefined,
+  poster: e.icono || undefined,
 });
 
 // Inicio: una sola fila con todos los eventos (sin separar por competición).
@@ -187,6 +192,7 @@ export async function liveChannels({ categoryId }) {
       ref: refEvento(e),
       categoryId,
       number: i + 1,
+      logo: e.icono || undefined,
     })),
   };
 }
@@ -201,6 +207,7 @@ export const AJUSTES_A_VACIAR = ["forzar"];
 
 export async function action(key) {
   if (key === "mapa") return accionMapa();
+  if (key === "etiquetas") return accionEtiquetas();
   if (key !== "actualizar") return { message: texto("Listo", "Done") };
   const eventos = await cargarAgenda();
   const conSenal = eventos.filter((e) => e.opciones.length).length;
@@ -257,19 +264,38 @@ export function paginasDelMapa(entradas, max = MAX_PAGINA_MAPA) {
   return paginas;
 }
 
+// Muestra una lista larga de a un trozo por pulsación (la página se guarda en kino.storage bajo `clave`).
+function mensajePaginado(entradas, clave) {
+  const paginas = paginasDelMapa(entradas);
+  let n = Number(kino.storage.get(clave));
+  if (!Number.isInteger(n) || n < 0 || n >= paginas.length) n = 0;
+  kino.storage.set(clave, String((n + 1) % paginas.length));
+  const pie = paginas.length > 1 ? ` (${n + 1}/${paginas.length}) ${texto("Pulsa otra vez para ver más.", "Press again for more.")}` : "";
+  return { message: paginas[n] + pie, paginas: paginas.length };
+}
+
 async function accionMapa() {
   const eventos = await cargarAgenda();
   const entradas = mapaDeEtiquetas(eventos);
   if (!entradas.length) {
     return { message: texto("No hay eventos en la agenda de hoy: todavía no hay etiquetas que mostrar.", "There are no events in today's schedule: no tags to show yet.") };
   }
-  const paginas = paginasDelMapa(entradas);
-  kino.log("mapa de etiquetas v" + VERSION, entradas.length + " etiquetas", paginas.length + " páginas");
-  let n = Number(kino.storage.get("mapaPagina"));
-  if (!Number.isInteger(n) || n < 0 || n >= paginas.length) n = 0;
-  kino.storage.set("mapaPagina", String((n + 1) % paginas.length));
-  const pie = paginas.length > 1 ? ` (${n + 1}/${paginas.length}) ${texto("Pulsa otra vez para ver más.", "Press again for more.")}` : "";
-  return { message: paginas[n] + pie };
+  const { message, paginas } = mensajePaginado(entradas, "mapaPagina");
+  kino.log("mapa de etiquetas v" + VERSION, entradas.length + " etiquetas", paginas + " páginas");
+  return { message };
+}
+
+// Botón "Ver todas las etiquetas": las que el sitio conoce en su CSS (aunque hoy no haya partidos de ellas) y el nombre
+// de su imagen, que suele decir de qué torneo o país es ("libertadore", "sudamericana", "championsleague"…).
+async function accionEtiquetas() {
+  const iconos = iconosDeAgenda(await pedirAgenda());
+  const entradas = etiquetasDelSitio(iconos);
+  if (!entradas.length) {
+    return { message: texto("No pude leer las etiquetas del sitio.", "Could not read the site's tags.") };
+  }
+  const { message, paginas } = mensajePaginado(entradas, "etiquetasPagina");
+  kino.log("etiquetas del sitio v" + VERSION, entradas.length + " etiquetas", paginas + " páginas");
+  return { message };
 }
 
 // --- resolve ---------------------------------------------------------------------------------------
@@ -400,6 +426,26 @@ function fechaDeAgenda(html) {
   return mes === undefined ? null : Date.UTC(Number(m[3]), mes, Number(m[1]));
 }
 
+// El CSS de la agenda le pone a cada etiqueta su imagen: `.AR > a:before { background-image: url(https://…/argentina.png) }`.
+// Se lee de ahí (no se copia la lista) para que una etiqueta nueva o una imagen cambiada se tomen solas.
+export function iconosDeAgenda(html) {
+  const iconos = {};
+  for (const m of html.matchAll(/\.([A-Za-z0-9_]+)\s*>\s*a:before\s*\{[^}]*?url\(\s*["']?([^"')]+?)["']?\s*\)/g)) {
+    const url = m[2].trim().replace(/ /g, "%20");
+    if (/^https:\/\//.test(url)) iconos[m[1]] = url;
+  }
+  return iconos;
+}
+
+// "ARA: arabia", "LIB: libertadore"…: la etiqueta y el nombre de su imagen (sin carpeta ni extensión).
+export function etiquetasDelSitio(iconos) {
+  return Object.entries(iconos).map(([tipo, url]) => {
+    let nombre = url.split("/").pop().split("?")[0];
+    try { nombre = decodeURIComponent(nombre); } catch { /* se deja tal cual */ }
+    return `${tipo}: ${nombre.replace(/\.[A-Za-z0-9]+$/, "")}`;
+  });
+}
+
 export function parsearAgenda(html) {
   const eventos = [];
   const reEvento = /<li class="([\w-]+)">\s*<a href="#">([\s\S]*?)<\/a>\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/g;
@@ -417,8 +463,11 @@ export function parsearAgenda(html) {
       evento: limpiar(cabecera.replace(/<span class="t">[\s\S]*?<\/span>/, "")),
       opciones,
       inicioMs: null,
+      icono: null,
     });
   }
+  const iconos = iconosDeAgenda(html);
+  for (const e of eventos) e.icono = iconos[e.tipo] ?? null;
   const base = fechaDeAgenda(html);
   let dia = 0;
   let previo = -1;

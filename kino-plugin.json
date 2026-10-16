@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -108,6 +108,12 @@
       "label": "Ver mapa de competiciones",
       "type": "action",
       "hint": "Muestra la etiqueta de cada competición de hoy, para el orden de etiquetas."
+    },
+    {
+      "key": "etiquetas",
+      "label": "Ver todas las etiquetas",
+      "type": "action",
+      "hint": "Lista las que conoce el sitio, aunque hoy no haya partidos de ellas."
     },
     {
       "key": "actualizar",

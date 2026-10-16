@@ -46,7 +46,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, iconosDeAgenda, etiquetasDelSitio, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -518,4 +518,86 @@ test("manifiesto: el ajuste orden es un texto sin valor por defecto", () => {
   assert.equal(orden.default, undefined);
   assert.ok(orden.label.length <= 40 && orden.hint.length <= 80);
   assert.ok(!AJUSTES_A_VACIAR.includes("orden"));
+});
+
+test("iconosDeAgenda: lee del CSS de la agenda la imagen de cada etiqueta", () => {
+  const iconos = iconosDeAgenda(agendaSinSenales);
+  assert.equal(Object.keys(iconos).length, 39);
+  assert.equal(iconos.AR, "https://tvtveshd.com/iconos/argentina.png");
+  assert.equal(iconos.LIB, "https://tvtveshd.com/iconos/libertadore.png");
+  assert.equal(iconos.SUD, "https://tvtveshd.com/iconos/sudamericana.png");
+  assert.equal(iconos.UEFA, "https://tvtveshd.com/iconos/uefa%20hd.png"); // el espacio se codifica
+  assert.ok(Object.values(iconos).every((u) => /^https:\/\/\S+$/.test(u) && u.length <= 2048));
+  // la agenda del 14 también trae el CSS
+  assert.equal(Object.keys(iconosDeAgenda(agenda)).length, 39);
+  assert.deepEqual(iconosDeAgenda("<ul></ul>"), {});
+  // solo https, comillas opcionales
+  const css = `.A > a:before { background-image: url("https://x.test/a.png") } .B > a:before { background-image: url(http://x.test/b.png) } .C > a:before { background-image: url('https://x.test/c d.png') }`;
+  assert.deepEqual(iconosDeAgenda(css), { A: "https://x.test/a.png", C: "https://x.test/c%20d.png" });
+});
+
+test("miniaturas: poster en las tarjetas de Inicio y logo en los canales de En vivo, según la etiqueta", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    ajustes = {};
+    const items = (await home())[0].items;
+    const por = (txt) => items.find((i) => i.title.includes(txt));
+    assert.equal(por("Al Quadisiya").poster, "https://tvtveshd.com/iconos/arabia.png"); // ARA
+    assert.equal(por("Boca Juniors").poster, "https://tvtveshd.com/iconos/argentina.png"); // AR
+    assert.equal(por("Necaxa").poster, "https://tvtveshd.com/iconos/mexico.png"); // MEX
+    assert.ok(items.every((i) => /^https:\/\//.test(i.poster)));
+    const canales = (await liveChannels({ categoryId: "todos" })).items;
+    assert.equal(canales.find((c) => c.title.includes("Boca Juniors")).logo, "https://tvtveshd.com/iconos/argentina.png");
+    assert.ok(canales.every((c) => /^https:\/\//.test(c.logo)));
+    // una etiqueta sin imagen no lleva miniatura
+    agendaActiva = `<style>.AR > a:before { background-image: url(https://x.test/ar.png) }</style><ul class="menu"><b>Agenda - Viernes 16 de Octubre de 2026</b>` +
+      `<li class="AR"><a href="#">Liga: a vs b<span class="t">10:00</span></a><ul>\n</ul>\n</li><li class="ZZZ"><a href="#">Copa: c vs d<span class="t">11:00</span></a><ul>\n</ul>\n</li></ul>`;
+    const dos = (await home())[0].items;
+    assert.equal(dos[0].poster, "https://x.test/ar.png");
+    assert.equal(dos[1].poster, undefined);
+  } finally {
+    agendaActiva = agenda;
+  }
+});
+
+test("etiquetasDelSitio: etiqueta y nombre de su imagen, sin carpeta ni extensión", () => {
+  const lista = etiquetasDelSitio({ LIB: "https://x.test/iconos/libertadore.png", UEFA: "https://x.test/iconos/uefa%20hd.png", FUT: "https://x.test/iconos/fut.webp" });
+  assert.deepEqual(lista, ["LIB: libertadore", "UEFA: uefa hd", "FUT: fut"]);
+});
+
+test("action etiquetas: lista las 39 etiquetas del sitio en páginas de menos de 300 caracteres y las cicla", async () => {
+  almacen = {};
+  agendaActiva = agendaSinSenales;
+  try {
+    const paginas = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await action("etiquetas");
+      assert.ok(r.message.length <= 300, `página ${i + 1} mide ${r.message.length}`);
+      assert.equal(r.clearSettings, undefined);
+      paginas.push(r.message);
+    }
+    assert.match(paginas[0], /\(1\/3\)/);
+    assert.match(paginas[2], /\(3\/3\)/);
+    assert.equal(paginas[3], paginas[0]); // vuelve a la primera
+    const todo = paginas.slice(0, 3).join(" · ");
+    for (const etiqueta of ["TUR: turquia", "LIB: libertadore", "SUD: sudamericana", "ARA: arabia", "CONNAT: CONNAT"]) assert.ok(todo.includes(etiqueta), etiqueta);
+    // la paginación de este botón y la del mapa no se pisan
+    almacen = {};
+    await action("etiquetas");
+    assert.equal(almacen.mapaPagina, undefined);
+    assert.ok("etiquetasPagina" in almacen);
+    // sin CSS legible
+    agendaActiva = agendaVacia;
+    assert.match((await action("etiquetas")).message, /No pude leer las etiquetas/);
+  } finally {
+    almacen = {};
+    agendaActiva = agenda;
+  }
+});
+
+test("manifiesto: el botón de todas las etiquetas existe y no vacía ajustes", () => {
+  const por = Object.fromEntries(manifiesto.settings.map((x) => [x.key, x]));
+  assert.equal(por.etiquetas.type, "action");
+  assert.ok(!AJUSTES_A_VACIAR.includes("etiquetas"));
+  assert.ok(manifiesto.settings.every((x) => x.label.length <= 40 && (!x.hint || x.hint.length <= 80)));
 });
