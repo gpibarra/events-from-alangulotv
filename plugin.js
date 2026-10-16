@@ -1,25 +1,41 @@
 // AlAnguloTV: la agenda de alangulotv como canales en vivo.
-// Cada opción de un evento es un ítem live cuyo ref es la URL del embed; resolve abre ese embed
-// en el navegador oculto de Kino y devuelve la primera petición de video que hace la página.
+// Estructura: categoría = competición (el texto antes de los ":" del evento), canal = evento, y las
+// señales del evento (TNT Sports, Op2, Op3…) son copias con etiqueta del canal, en el menú "Servidor".
+// resolve abre el embed de una señal en el navegador oculto de Kino y devuelve la petición de video.
+
 // Único lugar con el dominio de la agenda. Si cambia, se cambia aquí y en "hosts" de kino-plugin.json
 // (un JSON no puede leerlo; un test comprueba que ambos coincidan).
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.2.1";
+export const VERSION = "0.3.0";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const MAX_FILAS = 20;
+const PREFIJO_EVENTO = "ev:";
+
+// Las horas de la agenda vienen en UTC+1: el /hora.js del sitio las pasa a la zona del visitante con
+// hora_local = hora + (UTC_del_visitante - 1). El ajuste "tz" (kino-plugin.json) es esa zona.
+const UTC_AGENDA = 1;
+const TZ_POR_DEFECTO = -3; // Argentina
 
 // Un extractor por dominio del embed. Si el método de uno cambia, se escribe otra función con la
-// misma firma (embed) => Stream y se apunta aquí. Un dominio sin entrada usa extraerPorRed().
+// misma firma (embed) => Stream y se apunta aquí. `prioridad` ordena las señales de un evento: se
+// prueba primero la de número menor. Un dominio sin entrada usa extraerPorRed() con prioridad 5.
 const EXTRACTORES = {
   // Sin Referer a propósito: el iframe de missflight.net solo sirve el reproductor si su Referer es
   // spf24live.st; un Referer puesto a la primera carga se le pasa también y responde "NOT ALLOWED".
-  "spf24live.st": extraerPorRed(),
-  "latamzy.com": extraerPorRed({ referer: BASE + "/" }),
-  "sudamericafy.com": extraerPorRed({ referer: BASE + "/" }),
+  // En la app de Kino igual falla ("domain protected"), por eso va al final.
+  "spf24live.st": { extraer: extraerPorRed(), prioridad: 9 },
+  "latamzy.com": { extraer: extraerPorRed({ referer: BASE + "/" }), prioridad: 1 },
+  "sudamericafy.com": { extraer: extraerPorRed({ referer: BASE + "/" }), prioridad: 1 },
 };
+const POR_DEFECTO = { extraer: extraerPorRed(), prioridad: 5 };
+const extractorDe = (embed) => EXTRACTORES[new URL(embed).hostname] ?? POR_DEFECTO;
+
+const texto = (es, en) => (String(kino.lang).startsWith("en") ? en : es);
+
+// --- Agenda: competiciones y eventos --------------------------------------------------------------
 
 async function cargarAgenda() {
   const r = await kino.fetch(AGENDA, { headers: { Referer: BASE + "/" } });
@@ -27,20 +43,60 @@ async function cargarAgenda() {
   return parsearAgenda(r.text()).filter((e) => e.opciones.length);
 }
 
-const idEvento = (e) => "ev-" + hash(e.evento);
-const idOpcion = (o) => "op-" + hash(o.embed);
-const tituloEvento = (e) => (e.hora ? e.hora + " · " : "") + e.evento;
+// "Copa Libertadores: Estudiantes LP vs Flamengo" -> { competicion, partido }. Sin ":", la
+// competición es el tipo (AR, COL…) que el sitio le puso al evento.
+export function separarEvento(evento, tipo) {
+  const i = evento.indexOf(": ");
+  return i > 0
+    ? { competicion: evento.slice(0, i), partido: evento.slice(i + 2) }
+    : { competicion: tipo || "Otros", partido: evento };
+}
 
-// Inicio: una fila por evento, con una tarjeta live por cada opción de señal.
+// Competiciones en el orden en que aparecen, cada una con sus eventos.
+export function agruparPorCompeticion(eventos) {
+  const grupos = new Map();
+  for (const e of eventos) {
+    const { competicion, partido } = separarEvento(e.evento, e.tipo);
+    if (!grupos.has(competicion)) grupos.set(competicion, { id: "co-" + hash(competicion), titulo: competicion, eventos: [] });
+    grupos.get(competicion).eventos.push({ ...e, partido });
+  }
+  return [...grupos.values()];
+}
+
+export function zonaHoraria() {
+  const n = Number(kino.config.get("tz"));
+  return Number.isFinite(n) && n >= -12 && n <= 14 ? n : TZ_POR_DEFECTO;
+}
+
+// "00:00" (UTC+1) -> "20:00" en UTC-3. Solo la hora del día: si cruza la medianoche, no se marca el día.
+export function convertirHora(hhmm, tz) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
+  if (!m) return hhmm || null;
+  const minutos = (((Number(m[1]) * 60 + Number(m[2]) + (tz - UTC_AGENDA) * 60) % 1440) + 1440) % 1440;
+  const dos = (n) => String(n).padStart(2, "0");
+  return dos(Math.floor(minutos / 60)) + ":" + dos(minutos % 60);
+}
+
+const idEvento = (e) => "ev-" + hash(e.evento);
+const tituloEvento = (e, tz) => {
+  const hora = convertirHora(e.hora, tz);
+  return (hora ? hora + " · " : "") + e.partido;
+};
+
+// El ref del canal lleva todas sus señales, para resolver sin volver a pedir la agenda.
+const refEvento = (e) => PREFIJO_EVENTO + JSON.stringify(e.opciones.map((o) => ({ n: o.texto, e: o.embed })));
+
+// Inicio: una fila por competición; cada evento es una tarjeta live.
 export async function home() {
-  const eventos = await cargarAgenda();
-  return eventos.slice(0, MAX_FILAS).map((e) => ({
-    id: idEvento(e),
-    title: tituloEvento(e),
-    items: e.opciones.map((o) => ({
-      id: idOpcion(o),
-      ref: o.embed,
-      title: o.texto,
+  const tz = zonaHoraria();
+  const grupos = agruparPorCompeticion(await cargarAgenda());
+  return grupos.slice(0, MAX_FILAS).map((g) => ({
+    id: g.id,
+    title: g.titulo,
+    items: g.eventos.map((e) => ({
+      id: idEvento(e),
+      ref: refEvento(e),
+      title: tituloEvento(e, tz),
       kind: "live",
       overview: e.evento,
       badges: e.tipo ? [e.tipo] : undefined,
@@ -48,29 +104,76 @@ export async function home() {
   }));
 }
 
-// Pestaña "En vivo": cada evento es una categoría y sus opciones son los canales.
+// Pestaña "En vivo": cada competición es una categoría y sus eventos son los canales.
 export async function liveCategories() {
-  const eventos = await cargarAgenda();
-  return eventos.slice(0, 200).map((e) => ({ id: idEvento(e), title: tituloEvento(e), genre: "deportes" }));
+  const grupos = agruparPorCompeticion(await cargarAgenda());
+  return grupos.slice(0, 200).map((g) => ({ id: g.id, title: g.titulo, genre: "deportes" }));
 }
 
 export async function liveChannels({ categoryId }) {
-  const eventos = await cargarAgenda();
-  const evento = eventos.find((e) => idEvento(e) === categoryId);
-  if (!evento) return { items: [] };
+  const tz = zonaHoraria();
+  const grupos = agruparPorCompeticion(await cargarAgenda());
+  const grupo = grupos.find((g) => g.id === categoryId);
+  if (!grupo) return { items: [] };
   return {
-    items: evento.opciones.map((o, i) => ({
-      id: idOpcion(o),
-      title: o.texto,
-      ref: o.embed,
+    items: grupo.eventos.map((e, i) => ({
+      id: idEvento(e),
+      title: tituloEvento(e, tz),
+      ref: refEvento(e),
       categoryId,
       number: i + 1,
     })),
   };
 }
 
+// --- resolve ---------------------------------------------------------------------------------------
+
 export async function resolve(ref) {
   await Promise.resolve(); // Kino 0.9.49 y anteriores no atajan un throw antes del primer await
+  return ref.startsWith(PREFIJO_EVENTO) ? resolverEvento(ref) : resolverSenal(ref);
+}
+
+// Un evento: prueba sus señales por prioridad y devuelve la primera que anda. Las demás van como copias
+// con etiqueta (menú "Servidor"): Kino las resuelve solo si la persona las elige o si esta falla.
+async function resolverEvento(ref) {
+  let senales;
+  try {
+    senales = JSON.parse(ref.slice(PREFIJO_EVENTO.length)).map((s) => ({ n: String(s.n).slice(0, 48), e: String(s.e) }));
+    if (!senales.length) throw new Error("sin señales");
+  } catch {
+    throw kino.error("not_found", "ref de evento inválido");
+  }
+  senales.sort((a, b) => prioridadDe(a.e) - prioridadDe(b.e));
+  for (const [i, senal] of senales.entries()) {
+    try {
+      const stream = await resolverSenal(senal.e);
+      return {
+        ...stream,
+        label: senal.n,
+        alternatives: senales.filter((_, j) => j !== i).map((s) => ({ label: s.n, ref: s.e })),
+      };
+    } catch (e) {
+      kino.log("señal descartada", new URL(senal.e).hostname, e.code);
+    }
+  }
+  throw kino.error("unavailable", "ninguna señal respondió", {
+    userMessage: texto(
+      "No se pudo abrir ninguna señal de este evento ahora. Prueba de nuevo más tarde.",
+      "None of this event's signals could be opened right now. Try again later.",
+    ),
+  });
+}
+
+function prioridadDe(embed) {
+  try {
+    return extractorDe(embed).prioridad;
+  } catch {
+    return 99;
+  }
+}
+
+// Una señal (el embed de un servidor): se resuelve con el extractor de su dominio.
+async function resolverSenal(ref) {
   let embed;
   try {
     embed = new URL(ref);
@@ -78,8 +181,7 @@ export async function resolve(ref) {
     throw kino.error("not_found", "ref inválido");
   }
   kino.log("resolve v" + VERSION, embed.hostname);
-  const extraer = EXTRACTORES[embed.hostname] ?? extraerPorRed();
-  return extraer(embed.href);
+  return extractorDe(embed.href).extraer(embed.href);
 }
 
 // Método "red": la página arma el reproductor con sus scripts, así que se abre oculta y se toma la
@@ -92,15 +194,16 @@ function extraerPorRed({ referer } = {}) {
     try {
       captura = await kino.browser.capture(embed, {
         ...(referer ? { headers: { Referer: referer } } : {}),
-        timeoutMs: 20000,
+        timeoutMs: 15000, // Kino da 20 s a una copia perezosa y 75 s a todo el resolve
         match: "\\.m3u8",
       });
     } catch (e) {
       kino.log("captura falló", host, e.code, e.message);
       throw kino.error("unavailable", "captura " + (e.code || "falló"), {
-        userMessage: String(kino.lang).startsWith("en")
-          ? "This signal could not be opened right now. Try another option of the event."
-          : "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
+        userMessage: texto(
+          "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
+          "This signal could not be opened right now. Try another option of the event.",
+        ),
       });
     }
     kino.log("captura ok", host, captura.media.length + " medios");

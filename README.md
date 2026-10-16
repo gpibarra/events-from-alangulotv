@@ -30,6 +30,8 @@ node sdk/run.mjs . home          # ejecuta home() contra la agenda real
 node --test test/plugin.test.mjs
 ```
 
+**Estructura:** categoría = competición (texto antes de los «:»), canal = evento, y las señales del evento son copias con etiqueta (menú «Servidor»). **Zona horaria:** ajuste `tz` (por defecto UTC−3); la agenda viene en UTC+1.
+
 `kino.browser.capture` (usado en `resolve`) solo funciona dentro de la app; el kit de Node lo simula en los tests.
 
 ## Licencia

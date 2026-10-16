@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -27,5 +27,68 @@
   ],
   "discoverable": false,
   "color": "#FFB020",
-  "icon": "icon.png"
+  "icon": "icon.png",
+  "settings": [
+    {
+      "key": "tz",
+      "label": "Zona horaria",
+      "type": "select",
+      "default": "-3",
+      "options": [
+        {
+          "value": "-9",
+          "label": "UTC-9"
+        },
+        {
+          "value": "-8",
+          "label": "UTC-8"
+        },
+        {
+          "value": "-7",
+          "label": "UTC-7"
+        },
+        {
+          "value": "-6",
+          "label": "UTC-6 · México, Centroamérica"
+        },
+        {
+          "value": "-5",
+          "label": "UTC-5 · Colombia, Perú, Ecuador"
+        },
+        {
+          "value": "-4",
+          "label": "UTC-4 · Venezuela, Bolivia, Chile"
+        },
+        {
+          "value": "-3",
+          "label": "UTC-3 · Argentina, Uruguay, Brasil"
+        },
+        {
+          "value": "-2",
+          "label": "UTC-2"
+        },
+        {
+          "value": "-1",
+          "label": "UTC-1"
+        },
+        {
+          "value": "0",
+          "label": "UTC+0"
+        },
+        {
+          "value": "1",
+          "label": "UTC+1 · hora de la agenda"
+        },
+        {
+          "value": "2",
+          "label": "UTC+2"
+        },
+        {
+          "value": "3",
+          "label": "UTC+3"
+        }
+      ],
+      "hint": "Zona en que se muestran las horas (la agenda viene en UTC+1)."
+    }
+  ]
 }
