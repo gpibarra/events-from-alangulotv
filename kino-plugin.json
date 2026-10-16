@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -105,15 +105,15 @@
     },
     {
       "key": "mapa",
-      "label": "Ver mapa de competiciones",
+      "label": "Ver etiquetas de competiciones",
       "type": "action",
-      "hint": "Muestra la etiqueta de cada competición de hoy, para el orden de etiquetas."
+      "hint": "Competiciones de hoy. Si la lista es larga, pulsa de nuevo para pasar de página."
     },
     {
       "key": "etiquetas",
       "label": "Ver todas las etiquetas",
       "type": "action",
-      "hint": "Lista las que conoce el sitio, aunque hoy no haya partidos de ellas."
+      "hint": "Todas las del sitio. Si la lista es larga, pulsa de nuevo para pasar de página."
     },
     {
       "key": "actualizar",

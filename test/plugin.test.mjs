@@ -446,7 +446,7 @@ test("paginasDelMapa: reparte en páginas que caben en el límite", () => {
   const paginas = paginasDelMapa(entradas, 100);
   assert.ok(paginas.length > 1);
   assert.ok(paginas.every((p) => p.length <= 100));
-  assert.deepEqual(paginas.join(" · ").split(" · "), entradas); // no se pierde ni se repite nada
+  assert.deepEqual(paginas.join("\n").split("\n"), entradas); // no se pierde ni se repite nada
   assert.deepEqual(paginasDelMapa([], 100), []);
   assert.ok(paginasDelMapa(["x".repeat(500)], 100)[0].length <= 100);
 });

@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.2";
+export const VERSION = "0.7.3";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -252,11 +252,11 @@ export function paginasDelMapa(entradas, max = MAX_PAGINA_MAPA) {
   let actual = "";
   for (const entrada of entradas) {
     const corta = entrada.length > max ? entrada.slice(0, max - 1) + "…" : entrada;
-    if (actual && (actual + " · " + corta).length > max) {
+    if (actual && (actual + "\n" + corta).length > max) {
       paginas.push(actual);
       actual = corta;
     } else {
-      actual = actual ? actual + " · " + corta : corta;
+      actual = actual ? actual + "\n" + corta : corta;
     }
   }
   if (actual) paginas.push(actual);
@@ -269,7 +269,7 @@ function mensajePaginado(entradas, clave) {
   let n = Number(kino.storage.get(clave));
   if (!Number.isInteger(n) || n < 0 || n >= paginas.length) n = 0;
   kino.storage.set(clave, String((n + 1) % paginas.length));
-  const pie = paginas.length > 1 ? ` (${n + 1}/${paginas.length}) ${texto("Pulsa otra vez para ver más.", "Press again for more.")}` : "";
+  const pie = paginas.length > 1 ? `\n(${n + 1}/${paginas.length}) ${texto("Pulsa otra vez para ver más.", "Press again for more.")}` : "";
   return { message: paginas[n] + pie, paginas: paginas.length };
 }
 
