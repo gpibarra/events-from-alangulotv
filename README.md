@@ -50,7 +50,7 @@ Cada dominio de embed tiene en `EXTRACTORES` (`plugin.js`) una **lista de métod
 
 El método «navegador» usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
 
-Los métodos directo y descifrado **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), y Kino reintentaría ese m3u8 sin pasar a otra señal. Si no es una lista HLS, la señal se descarta (sin probar el navegador, que vería el mismo canal apagado) y se prueba la siguiente. Para eso los servidores de video (`*.fubo18.com`, `*.domhsd.com`, `*.7m12bgo8dx9z.net`) están en `hosts`; si uno cambia de dominio, el m3u8 se devuelve sin comprobar.
+Todos los métodos, también el navegador, **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), el navegador la «captura» aunque no responda, y Kino reintentaría ese m3u8 sin pasar a otra señal. Si responde un error, no contesta en 8 s o no es una lista HLS, la señal se descarta (sin probar otro método de ese servidor, que vería el mismo canal apagado) y se prueba la siguiente. Para eso los servidores de video (`*.fubo18.com`, `*.domhsd.com`, `*.7m12bgo8dx9z.net`) están en `hosts`; si uno cambia de dominio, el m3u8 se devuelve sin comprobar.
 
 latamzy y sudamericafy arman el iframe con un script ofuscado, así que el dominio del reproductor está escrito en el plugin. Si cambia, el método directo falla y queda el navegador.
 

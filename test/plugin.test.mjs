@@ -41,13 +41,14 @@ globalThis.kino = {
     }
     if (url.includes(".m3u8")) {
       if (url.includes("no-declarado")) throw Object.assign(new Error("host"), { code: "host_not_allowed" });
+      if (url.includes("lento")) throw Object.assign(new Error("timeout"), { code: "timeout" });
       if (url.includes("apagado")) return { ok: false, status: 404, text: () => "not found" };
       return { ok: true, status: 200, text: () => "#EXTM3U\n#EXT-X-VERSION:3\n" };
     }
     if (url.startsWith("https://streamtp99a.sbs/") || url.startsWith("https://la18hd.su/")) {
       // Solo el stream "directo" trae playbackURL; los demás hacen caer al navegador oculto.
       const stream = new URL(url).searchParams.get("stream");
-      const html = ["directo", "apagado", "no-declarado"].includes(stream)
+      const html = ["directo", "apagado", "no-declarado", "lento"].includes(stream)
         ? `var playbackURL = "https:\\/\\/99.cdn.example:443\\/global\\/${stream}\\/index.m3u8?token=t&ip=1.2.3.4";`
         : "<html></html>";
       return { ok: true, status: 200, text: () => html };
@@ -64,6 +65,7 @@ globalThis.kino = {
       capturas.push({ url, options });
       if (url.includes("falla")) throw Object.assign(new Error("x"), { code: "timeout" });
       if (url.includes("vacio")) return { media: [], subtitles: [], finalUrl: url };
+      if (url.includes("captura-apagada")) return { media: [{ url: "https://cdn.example/apagado.m3u8", headers: {} }], subtitles: [], finalUrl: url };
       return {
         media: [
           { url: "https://cdn.example/a.mp4", headers: {} },
@@ -241,6 +243,14 @@ test("canal fuera del aire: el m3u8 se comprueba antes de devolverlo y, si no es
     { n: "Buena", e: "https://latamzy.com/global1.php?stream=directo" },
   ]);
   assert.equal((await resolve(ref)).label, "Buena");
+  // un m3u8 que no contesta a tiempo también es un canal fuera del aire, sin probar el navegador
+  capturas = [];
+  await assert.rejects(resolve("https://latamzy.com/global1.php?stream=lento"), (e) => e.fueraDelAire && /no respondió/.test(e.message));
+  assert.equal(capturas.length, 0);
+  // lo que captura el navegador también se comprueba
+  capturas = [];
+  await assert.rejects(resolve("https://latamzy.com/global1.php?stream=captura-apagada"), (e) => e.fueraDelAire && /apagado|respondió 404/.test(e.message));
+  assert.equal(capturas.length, 1, "el directo no encontró playbackURL y probó el navegador");
   // un servidor de video no declarado no se puede comprobar: se devuelve igual
   const sinComprobar = await resolve("https://latamzy.com/global1.php?stream=no-declarado");
   assert.match(sinComprobar.url, /no-declarado/);
