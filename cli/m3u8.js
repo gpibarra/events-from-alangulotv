@@ -13,7 +13,7 @@ const embeds = [...new Set(links.map((l) => l.embed).filter(Boolean))];
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
-  headless: process.env.HEADLESS === '1' ? 'new' : false,
+  headless: process.env.VENTANA === '1' ? false : 'new',
   ignoreDefaultArgs: ['--enable-automation'],
   args: [
     '--no-sandbox',
@@ -26,6 +26,8 @@ const browser = await puppeteer.launch({
 const porEmbed = new Map();
 for (const embed of embeds) {
   const page = await browser.newPage();
+  // En modo sin ventana Chrome se anuncia como "HeadlessChrome" y spf24live no sirve el video; se le quita la marca.
+  await page.setUserAgent((await browser.userAgent()).replace('HeadlessChrome', 'Chrome'));
   try {
     const info = await elegirExtractor(embed)({ page, embed, referer: REFERER });
     porEmbed.set(embed, info);
