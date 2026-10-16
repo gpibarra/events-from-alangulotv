@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -10,6 +10,8 @@
     "*.alangulotv.sx",
     "spf24live.st",
     "*.spf24live.st",
+    "missflight.net",
+    "*.missflight.net",
     "latamzy.com",
     "*.latamzy.com",
     "sudamericafy.com",

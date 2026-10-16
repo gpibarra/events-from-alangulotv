@@ -17,6 +17,17 @@ let ahora = AHORA_POR_DEFECTO;
 Date.now = () => ahora;
 let fallaAgenda = false;
 
+// El esquema de missflight.net al revés (ver descifrarEconfig): base64(JSON) partido en 4 trozos que van en el orden 1, 3, 0, 2,
+// cada uno en base64 con un relleno en la posición 3, todo junto en base64.
+function cifrarEconfig(config) {
+  let json = JSON.stringify(config);
+  while (btoa(json).length % 4 !== 0 || (btoa(json).length / 4) % 3 !== 0) json += " ";
+  const b = btoa(json), q = b.length / 4;
+  const dec = [];
+  [1, 3, 0, 2].forEach((i, k) => { dec[i] = b.slice(k * q, (k + 1) * q); });
+  return btoa(dec.map((d) => { const c = btoa(d); return c.slice(0, 3) + "a" + c.slice(3); }).join(""));
+}
+
 globalThis.kino = {
   lang: "es-CO",
   log: () => {},
@@ -25,13 +36,19 @@ globalThis.kino = {
   error: (code, message, options) => Object.assign(new Error(message), { code, options }),
   fetch: async (url, options) => {
     pedidos.push({ url, options });
+    if (url.startsWith("https://spf24live.st/")) {
+      return { ok: true, status: 200, text: () => (url.includes("sin-iframe") ? "<html></html>" : '<iframe src="https://missflight.net/e/abc123" width="100%"></iframe>') };
+    }
+    if (url.startsWith("https://missflight.net/")) {
+      return { ok: true, status: 200, text: () => `<script id="config">window._econfig='${cifrarEconfig({ stream_url: "https://c089pa.ejemplo.net:8443/hls/x.m3u8?s=t&e=1" })}';</script>` };
+    }
     if (fallaAgenda) return { ok: false, status: 503, text: () => "" };
     return { ok: true, status: 200, text: () => agendaActiva };
   },
   browser: {
     capture: async (url, options) => {
       capturas.push({ url, options });
-      if (url.includes("falla") || url.includes("spf24live")) throw Object.assign(new Error("x"), { code: "timeout" });
+      if (url.includes("falla")) throw Object.assign(new Error("x"), { code: "timeout" });
       if (url.includes("vacio")) return { media: [], subtitles: [], finalUrl: url };
       return {
         media: [
@@ -46,7 +63,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, iconosDeAgenda, etiquetasDelSitio, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, iconosDeAgenda, etiquetasDelSitio, descifrarEconfig, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -171,17 +188,24 @@ test("En vivo: categoría \"Todos\" primero, luego una por competición, y un ca
   assert.deepEqual((await liveChannels({ categoryId: "no-existe" })).items, []);
 });
 
-test("resolve de un evento: prueba las señales en el orden de la agenda y pasa a la siguiente si una falla", async () => {
+test("resolve de un evento: prueba las señales en el orden de la agenda y deja las demás como copias", async () => {
   capturas = [];
   const filas = await home();
-  const s = await resolve(filas[0].items[0].ref); // TNT Sports (spf24live, el mock la hace fallar), Op2 (latamzy), Op3 (sudamericafy)
-  assert.deepEqual(capturas.map((c) => new URL(c.url).hostname), ["spf24live.st", "latamzy.com"]); // primero la de la agenda, luego la siguiente
-  assert.equal(s.url, "https://cdn.example/x.m3u8?t=1");
+  const s = await resolve(filas[0].items[0].ref); // TNT Sports (spf24live), Op2 (latamzy), Op3 (sudamericafy)
+  assert.equal(capturas.length, 0); // la primera, spf24live, se resuelve sin navegador
+  assert.equal(s.url, "https://c089pa.ejemplo.net:8443/hls/x.m3u8?s=t&e=1");
   assert.equal(s.mime, "application/vnd.apple.mpegurl");
-  assert.deepEqual(s.headers, { Referer: "https://p.example/", "User-Agent": "UA" });
-  assert.equal(s.label, "TNT Sports Op2 Calidad 720p");
-  assert.deepEqual(s.alternatives.map((a) => a.label), ["TNT Sports Calidad 720p", "TNT Sports Op3 Calidad 720p"]);
+  assert.equal(s.label, "TNT Sports Calidad 720p");
+  assert.deepEqual(s.alternatives.map((a) => a.label), ["TNT Sports Op2 Calidad 720p", "TNT Sports Op3 Calidad 720p"]);
   assert.ok(s.alternatives.every((a) => a.ref.startsWith("https://") && a.ref.length <= 512));
+});
+
+test("resolve de una señal por navegador: devuelve el m3u8 capturado con sus headers", async () => {
+  capturas = [];
+  const s = await resolve("https://latamzy.com/global1.php?stream=tntsports");
+  assert.deepEqual(capturas[0].options.headers, { Referer: BASE + "/" });
+  assert.equal(s.url, "https://cdn.example/x.m3u8?t=1");
+  assert.deepEqual(s.headers, { Referer: "https://p.example/", "User-Agent": "UA" });
 });
 
 test("resolve de un ref anterior (JSON): si una señal falla pasa a la siguiente", async () => {
@@ -210,10 +234,29 @@ test("resolve de una copia (un embed): abre el embed con Referer y devuelve el m
   assert.equal(s.alternatives, undefined);
 });
 
-test("resolve: spf24live.st lleva su propio Referer en la primera carga (el iframe de missflight.net lo exige)", async () => {
+test("resolve: spf24live.st sin navegador, lee el iframe con User-Agent de Chrome y descifra el m3u8", async () => {
   capturas = [];
-  await assert.rejects(resolve("https://spf24live.st/channels/ch8.php")); // el mock lo hace fallar
-  assert.deepEqual(capturas[0].options.headers, { Referer: "https://spf24live.st/" });
+  pedidos.length = 0;
+  const s = await resolve("https://spf24live.st/channels/ch8.php");
+  assert.equal(capturas.length, 0);
+  assert.equal(s.url, "https://c089pa.ejemplo.net:8443/hls/x.m3u8?s=t&e=1");
+  assert.equal(s.mime, "application/vnd.apple.mpegurl");
+  assert.equal(s.headers.Referer, "https://missflight.net/");
+  assert.doesNotMatch(s.headers["User-Agent"], /; wv\)/);
+  const iframe = pedidos.find((p) => p.url.startsWith("https://missflight.net/"));
+  assert.equal(iframe.options.headers.Referer, "https://spf24live.st/");
+  assert.doesNotMatch(iframe.options.headers["User-Agent"], /; wv\)/);
+  for (const h of ["missflight.net", "*.missflight.net"]) assert.ok(manifiesto.hosts.includes(h), h);
+});
+
+test("resolve: spf24live.st sin iframe responde not_found", async () => {
+  await assert.rejects(resolve("https://spf24live.st/channels/sin-iframe.php"), (e) => e.code === "not_found");
+});
+
+test("descifrarEconfig: recupera el JSON y rechaza basura", () => {
+  const config = { stream_url: "https://h.example/a.m3u8", p2p: true };
+  assert.deepEqual(descifrarEconfig(cifrarEconfig(config)), config);
+  assert.throws(() => descifrarEconfig(btoa("corto")));
 });
 
 test("resolve: errores tipados y ref inválido", async () => {

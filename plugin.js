@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.5";
+export const VERSION = "0.7.6";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -32,10 +32,9 @@ const DURACION_POR_DEFECTO = 3;
 // misma firma (embed) => Stream y se apunta aquí. Las señales de un evento se prueban en el orden en que las trae la
 // agenda. Un dominio sin entrada usa extraerPorRed().
 const EXTRACTORES = {
-  // La página de spf24live.st trae un iframe a missflight.net, que solo sirve el reproductor si su Referer es spf24live.st.
-  // Sin Referer el WebView de Kino lo deja pasar vacío ("domain protected"); el que se pone a la primera carga también
-  // le llega al iframe, así que se le pone el de la propia página.
-  "spf24live.st": { extraer: extraerPorRed({ referer: "https://spf24live.st/" }) },
+  // spf24live.st no se abre en el navegador oculto: su iframe (missflight.net) rechaza el User-Agent del WebView de
+  // Android ("; wv") con "domain protected". Se lee con kino.fetch y se descifra la configuración del reproductor.
+  "spf24live.st": { extraer: extraerSpf24 },
   "latamzy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
   "sudamericafy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
 };
@@ -372,6 +371,48 @@ async function resolverSenal(ref) {
   }
   kino.log("resolve v" + VERSION, embed.hostname);
   return extractorDe(embed.href).extraer(embed.href);
+}
+
+// Método "spf24live": la página solo trae un iframe a missflight.net, que sirve el reproductor si su Referer es
+// spf24live.st y el User-Agent es el de un Chrome (no un WebView). El iframe guarda el m3u8 en window._econfig:
+// base64 de cuatro trozos iguales, cada uno base64 con un carácter de relleno en la posición 3, que unidos en el
+// orden 1, 3, 0, 2 son el base64 de un JSON con `stream_url`. Los segmentos piden Referer missflight.net.
+const UA_CHROME = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+const ORDEN_ECONFIG = [1, 3, 0, 2];
+
+export function descifrarEconfig(econfig) {
+  const todo = atob(econfig);
+  const n = todo.length / 4;
+  if (!Number.isInteger(n) || n < 5) throw new Error("econfig de largo inesperado");
+  const trozos = [0, 1, 2, 3].map((i) => {
+    const t = todo.slice(i * n, (i + 1) * n);
+    return atob(t.slice(0, 3) + t.slice(4));
+  });
+  return JSON.parse(atob(ORDEN_ECONFIG.map((i) => trozos[i]).join("")));
+}
+
+async function extraerSpf24(embed) {
+  const pedir = async (url, referer) => {
+    const r = await kino.fetch(url, { headers: { Referer: referer, "User-Agent": UA_CHROME } });
+    if (!r.ok) throw kino.error("unavailable", new URL(url).hostname + " respondió " + r.status);
+    return r.text();
+  };
+  const pagina = await pedir(embed, BASE + "/");
+  const iframe = /<iframe[^>]+src=["'](https:\/\/[^"']+)["']/i.exec(pagina)?.[1];
+  if (!iframe) throw kino.error("not_found", "spf24live sin iframe");
+  const reproductor = await pedir(iframe, "https://spf24live.st/");
+  const econfig = /_econfig\s*=\s*["']([A-Za-z0-9+/=]+)["']/.exec(reproductor)?.[1];
+  if (!econfig) throw kino.error("not_found", "el iframe no trae configuración (" + new URL(iframe).hostname + ")");
+  let config;
+  try {
+    config = descifrarEconfig(econfig);
+  } catch (e) {
+    throw kino.error("not_found", "no se pudo descifrar la configuración: " + e.message);
+  }
+  const url = config.stream_url || config.stream_url_nop2p;
+  if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", "la configuración no trae stream_url");
+  kino.log("spf24live ok", new URL(iframe).hostname, new URL(url).hostname);
+  return { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": UA_CHROME } };
 }
 
 // Método "red": la página arma el reproductor con sus scripts, así que se abre oculta y se toma la
