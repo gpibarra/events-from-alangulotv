@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.4";
+export const VERSION = "0.7.5";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -32,10 +32,10 @@ const DURACION_POR_DEFECTO = 3;
 // misma firma (embed) => Stream y se apunta aquí. Las señales de un evento se prueban en el orden en que las trae la
 // agenda. Un dominio sin entrada usa extraerPorRed().
 const EXTRACTORES = {
-  // Sin Referer a propósito: el iframe de missflight.net solo sirve el reproductor si su Referer es
-  // spf24live.st; un Referer puesto a la primera carga se le pasa también y responde "NOT ALLOWED".
-  // En la app de Kino igual falla ("domain protected"), por eso va al final.
-  "spf24live.st": { extraer: extraerPorRed() },
+  // La página de spf24live.st trae un iframe a missflight.net, que solo sirve el reproductor si su Referer es spf24live.st.
+  // Sin Referer el WebView de Kino lo deja pasar vacío ("domain protected"); el que se pone a la primera carga también
+  // le llega al iframe, así que se le pone el de la propia página.
+  "spf24live.st": { extraer: extraerPorRed({ referer: "https://spf24live.st/" }) },
   "latamzy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
   "sudamericafy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
 };

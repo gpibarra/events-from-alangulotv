@@ -210,10 +210,10 @@ test("resolve de una copia (un embed): abre el embed con Referer y devuelve el m
   assert.equal(s.alternatives, undefined);
 });
 
-test("resolve: spf24live.st no manda Referer (su iframe lo rechazaría)", async () => {
+test("resolve: spf24live.st lleva su propio Referer en la primera carga (el iframe de missflight.net lo exige)", async () => {
   capturas = [];
   await assert.rejects(resolve("https://spf24live.st/channels/ch8.php")); // el mock lo hace fallar
-  assert.equal(capturas[0].options.headers, undefined);
+  assert.deepEqual(capturas[0].options.headers, { Referer: "https://spf24live.st/" });
 });
 
 test("resolve: errores tipados y ref inválido", async () => {
