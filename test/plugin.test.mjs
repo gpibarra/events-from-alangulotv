@@ -37,15 +37,24 @@ globalThis.kino = {
   fetch: async (url, options) => {
     pedidos.push({ url, options });
     if (url.startsWith("https://spf24live.st/")) {
-      return { ok: true, status: 200, text: () => (url.includes("sin-iframe") ? "<html></html>" : '<iframe src="https://missflight.net/e/abc123" width="100%"></iframe>') };
+      return { ok: true, status: 200, text: () => (url.includes("sin-iframe") ? "<html></html>" : `<iframe src="https://missflight.net/e/${url.includes("apagado") ? "apagado" : "abc123"}" width="100%"></iframe>`) };
+    }
+    if (url.includes(".m3u8")) {
+      if (url.includes("no-declarado")) throw Object.assign(new Error("host"), { code: "host_not_allowed" });
+      if (url.includes("apagado")) return { ok: false, status: 404, text: () => "not found" };
+      return { ok: true, status: 200, text: () => "#EXTM3U\n#EXT-X-VERSION:3\n" };
     }
     if (url.startsWith("https://streamtp99a.sbs/") || url.startsWith("https://la18hd.su/")) {
       // Solo el stream "directo" trae playbackURL; los demás hacen caer al navegador oculto.
-      const html = url.endsWith("stream=directo") ? 'var playbackURL = "https:\\/\\/99.cdn.example:443\\/global\\/directo\\/index.m3u8?token=t&ip=1.2.3.4";' : "<html></html>";
+      const stream = new URL(url).searchParams.get("stream");
+      const html = ["directo", "apagado", "no-declarado"].includes(stream)
+        ? `var playbackURL = "https:\\/\\/99.cdn.example:443\\/global\\/${stream}\\/index.m3u8?token=t&ip=1.2.3.4";`
+        : "<html></html>";
       return { ok: true, status: 200, text: () => html };
     }
     if (url.startsWith("https://missflight.net/")) {
-      return { ok: true, status: 200, text: () => `<script id="config">window._econfig='${cifrarEconfig({ stream_url: "https://c089pa.ejemplo.net:8443/hls/x.m3u8?s=t&e=1" })}';</script>` };
+      const m3u8 = url.includes("apagado") ? "https://c089pa.ejemplo.net:8443/hls/apagado.m3u8" : "https://c089pa.ejemplo.net:8443/hls/x.m3u8?s=t&e=1";
+      return { ok: true, status: 200, text: () => `<script id="config">window._econfig='${cifrarEconfig({ stream_url: m3u8 })}';</script>` };
     }
     if (fallaAgenda) return { ok: false, status: 503, text: () => "" };
     return { ok: true, status: 200, text: () => agendaActiva };
@@ -219,6 +228,23 @@ test("resolve directo: latamzy y sudamericafy van al reproductor sin navegador y
     assert.ok(manifiesto.hosts.includes(host) && manifiesto.hosts.includes("*." + host), host + " falta en hosts");
   }
   assert.equal(pedidos[0].options.headers["Sec-Fetch-Dest"], "iframe"); // la18hd.su solo responde a un iframe
+});
+
+test("canal fuera del aire: el m3u8 se comprueba antes de devolverlo y, si no es una lista, se pasa a la siguiente señal", async () => {
+  capturas = [];
+  // apagado: el método directo falla y no se prueba el navegador (vería el mismo canal apagado)
+  await assert.rejects(resolve("https://latamzy.com/global1.php?stream=apagado"), (e) => e.code === "unavailable" && e.fueraDelAire);
+  assert.equal(capturas.length, 0);
+  // en un evento, una señal apagada sin respaldo cede a la siguiente
+  const ref = "ev:" + JSON.stringify([
+    { n: "Apagada", e: "https://spf24live.st/channels/apagado.php" },
+    { n: "Buena", e: "https://latamzy.com/global1.php?stream=directo" },
+  ]);
+  assert.equal((await resolve(ref)).label, "Buena");
+  // un servidor de video no declarado no se puede comprobar: se devuelve igual
+  const sinComprobar = await resolve("https://latamzy.com/global1.php?stream=no-declarado");
+  assert.match(sinComprobar.url, /no-declarado/);
+  for (const h of ["fubo18.com", "domhsd.com", "7m12bgo8dx9z.net"]) assert.ok(manifiesto.hosts.includes("*." + h), h);
 });
 
 test("resolve: si el método directo falla, cae al navegador y devuelve el m3u8 capturado con sus headers", async () => {

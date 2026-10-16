@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.7";
+export const VERSION = "0.7.8";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -417,6 +417,7 @@ async function resolverSenal(ref) {
     } catch (e) {
       kino.log("método falló", embed.hostname, nombre, e.code, e.message);
       ultimo = e;
+      if (e.fueraDelAire) break;
     }
   }
   throw ultimo;
@@ -435,8 +436,33 @@ function extraerPlayback(urlDe, headers = {}) {
     if (!r.ok) throw kino.error("unavailable", new URL(reproductor).hostname + " respondió " + r.status);
     const url = /playbackURL\s*=\s*["']([^"']+)["']/.exec(await r.text())?.[1]?.replace(/\\\//g, "/");
     if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", new URL(reproductor).hostname + " sin playbackURL");
-    return { url, mime: MIME_HLS, headers: { "User-Agent": UA_CHROME_MOVIL } };
+    const resultado = { url, mime: MIME_HLS, headers: { "User-Agent": UA_CHROME_MOVIL } };
+    await comprobarEnElAire(resultado);
+    return resultado;
   };
+}
+
+// Los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), y Kino
+// reintenta ese m3u8 sin pasar a otra señal. Por eso se pide la lista antes de devolverla: si no responde o no es una
+// lista HLS, el método falla y se prueba la siguiente señal. Solo se puede pedir a un host del manifiesto; si el
+// servidor de video es otro (cambió de dominio), no se comprueba y se devuelve igual.
+async function comprobarEnElAire({ url, headers }) {
+  let r;
+  try {
+    r = await kino.fetch(url, { headers, timeoutMs: 8000 });
+  } catch (e) {
+    if (e.code === "host_not_allowed") {
+      kino.log("m3u8 sin comprobar (host no declarado)", new URL(url).hostname);
+      return;
+    }
+    throw kino.error("unavailable", "el m3u8 no respondió: " + (e.code || e.message));
+  }
+  const lista = r.ok ? await r.text() : "";
+  if (!lista.trimStart().startsWith("#EXTM3U")) {
+    const error = kino.error("unavailable", "canal fuera del aire: " + new URL(url).hostname + " respondió " + r.status);
+    error.fueraDelAire = true; // el navegador vería el mismo canal apagado: se pasa directo a la siguiente señal
+    throw error;
+  }
 }
 
 // Método "spf24live": la página solo trae un iframe a missflight.net, que sirve el reproductor si su Referer es
@@ -476,8 +502,10 @@ async function extraerSpf24(embed) {
   }
   const url = config.stream_url || config.stream_url_nop2p;
   if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", "la configuración no trae stream_url");
+  const stream = { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": UA_CHROME_MOVIL } };
+  await comprobarEnElAire(stream);
   kino.log("spf24live ok", new URL(iframe).hostname, new URL(url).hostname);
-  return { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": UA_CHROME_MOVIL } };
+  return stream;
 }
 
 // Método "red": la página arma el reproductor con sus scripts, así que se abre oculta y se toma la

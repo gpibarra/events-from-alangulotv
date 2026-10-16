@@ -20,7 +20,11 @@ El resultado se guarda en `output/links.json`.
 npm run streams                  # abre cada embed en Chrome y guarda los m3u8 en output/streams.json
 npm run open                     # lista los streams
 npm run open -- <número>         # abre uno en VLC con sus headers
+npm run hosts                    # compara los dominios de output/streams.json con los del plugin
+npm run all                      # schedule + streams + hosts
 ```
+
+`npm run hosts` revisa tres cosas: que cada servidor de la agenda (embed) tenga métodos en `EXTRACTORES` y esté en `hosts` (si no, es un error y termina con código 1); que el reproductor (el iframe que pide el m3u8) esté en `hosts`, porque si no el método directo no lo alcanza; y que el servidor de video también lo esté, para poder comprobar si el canal está en el aire. Ojo: que Chrome encuentre un m3u8 no significa que el canal esté transmitiendo, porque la captura toma la petición aunque responda 404.
 
 ## Plugin de Kino
 
@@ -45,6 +49,8 @@ Cada dominio de embed tiene en `EXTRACTORES` (`plugin.js`) una **lista de métod
 | `sudamericafy.com` | directo, navegador | Directo: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`). |
 
 El método «navegador» usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
+
+Los métodos directo y descifrado **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), y Kino reintentaría ese m3u8 sin pasar a otra señal. Si no es una lista HLS, la señal se descarta (sin probar el navegador, que vería el mismo canal apagado) y se prueba la siguiente. Para eso los servidores de video (`*.fubo18.com`, `*.domhsd.com`, `*.7m12bgo8dx9z.net`) están en `hosts`; si uno cambia de dominio, el m3u8 se devuelve sin comprobar.
 
 latamzy y sudamericafy arman el iframe con un script ofuscado, así que el dominio del reproductor está escrito en el plugin. Si cambia, el método directo falla y queda el navegador.
 

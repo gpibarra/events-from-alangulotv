@@ -13,6 +13,7 @@ export async function extraerPorRed({ page, embed, referer }) {
       referer: h.referer ?? null,
       origin: h.referer ? new URL(h.referer).origin : null,
       userAgent: h['user-agent'],
+      reproductor: req.frame()?.url() ?? null, // el frame que pidió el m3u8 (p. ej. el iframe del reproductor)
     };
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "events-from-alangulotv",
-  "version": "0.7.7",
+  "version": "0.7.8",
   "description": "Agenda de eventos deportivos en vivo de alangulotv: plugin de Kino y CLI para extraer los m3u8",
   "private": true,
   "type": "module",
@@ -9,7 +9,9 @@
     "schedule": "node cli/index.js",
     "dev": "node --watch cli/index.js",
     "open": "node cli/open.js",
-    "streams": "node cli/m3u8.js"
+    "streams": "node cli/m3u8.js",
+    "hosts": "node cli/hosts.js",
+    "all": "node cli/index.js && node cli/m3u8.js && node cli/hosts.js"
   },
   "license": "Apache-2.0",
   "dependencies": {
