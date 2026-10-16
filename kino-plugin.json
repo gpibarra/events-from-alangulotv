@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -89,6 +89,25 @@
         }
       ],
       "hint": "Zona en que se muestran las horas (la agenda viene en UTC+1)."
+    },
+    {
+      "key": "duracion",
+      "label": "Duración de un partido (horas)",
+      "type": "text",
+      "default": "3",
+      "hint": "Los que empezaron hace más que esto van al final de la lista."
+    },
+    {
+      "key": "orden",
+      "label": "Orden de etiquetas",
+      "type": "text",
+      "hint": "Códigos separados por coma, p. ej. AR,LIB,SUD. El resto va después."
+    },
+    {
+      "key": "mapa",
+      "label": "Ver mapa de competiciones",
+      "type": "action",
+      "hint": "Muestra la etiqueta de cada competición de hoy, para el orden de etiquetas."
     },
     {
       "key": "actualizar",

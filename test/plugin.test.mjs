@@ -10,12 +10,18 @@ let agendaActiva = agenda;
 const pedidos = [];
 let capturas = [];
 let ajustes = {};
+let almacen = {};
+// La hora de ahora se fija: por defecto, las 07:00 (UTC+1) del 16 de octubre de 2026, antes de todos los eventos de la agenda de ese día.
+const AHORA_POR_DEFECTO = Date.UTC(2026, 9, 16, 6, 0);
+let ahora = AHORA_POR_DEFECTO;
+Date.now = () => ahora;
 let fallaAgenda = false;
 
 globalThis.kino = {
   lang: "es-CO",
   log: () => {},
   config: { get: (clave) => ajustes[clave] },
+  storage: { get: (k) => (k in almacen ? almacen[k] : null), set: (k, v) => { almacen[k] = v; } },
   error: (code, message, options) => Object.assign(new Error(message), { code, options }),
   fetch: async (url, options) => {
     pedidos.push({ url, options });
@@ -40,7 +46,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, action, AJUSTES_A_VACIAR, ordenarParaTodos, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, action, AJUSTES_A_VACIAR, ordenarEventos, ordenEtiquetas, duracionHoras, mapaDeEtiquetas, paginasDelMapa, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -253,9 +259,9 @@ test("agenda con eventos sin señal: se muestran todos, los que tienen señal pr
   }
 });
 
-test("ordenarParaTodos: los que tienen señal primero y el orden de la agenda se conserva", () => {
+test("ordenarEventos sin hora: con señal antes que sin señal y la agenda se conserva en los empates", () => {
   const e = (n, senales) => ({ evento: n, opciones: new Array(senales).fill({}) });
-  assert.deepEqual(ordenarParaTodos([e("a", 0), e("b", 1), e("c", 0), e("d", 2)]).map((x) => x.evento), ["b", "d", "a", "c"]);
+  assert.deepEqual(ordenarEventos([e("a", 0), e("b", 1), e("c", 0), e("d", 2)]).map((x) => x.evento), ["b", "d", "a", "c"]);
 });
 
 test("límites: la fila de Inicio se corta en 60 y En vivo \"Todos\" lista todos", async () => {
@@ -328,4 +334,188 @@ test("action: con eventos sin señal los cuenta; con la agenda vacía avisa y no
   } finally {
     agendaActiva = agenda;
   }
+});
+
+test("ordenEtiquetas: lista separada por comas, sin espacios ni mayúsculas, vacía por defecto", () => {
+  ajustes = {};
+  assert.deepEqual(ordenEtiquetas(), []);
+  ajustes = { orden: "" };
+  assert.deepEqual(ordenEtiquetas(), []);
+  ajustes = { orden: " ar , lib ,, SUD " };
+  assert.deepEqual(ordenEtiquetas(), ["AR", "LIB", "SUD"]);
+  ajustes = { orden: 5 };
+  assert.deepEqual(ordenEtiquetas(), []);
+  ajustes = {};
+});
+
+test("ordenarEventos con etiquetas: las nombradas primero y el resto en el orden de la agenda", () => {
+  const e = (n, tipo, senales = 1) => ({ evento: n, tipo, opciones: new Array(senales).fill({}) });
+  const ctx = (orden) => ({ orden, ahora: -Infinity, duracionMs: 0 });
+  const lista = [e("a", "COL"), e("b", "AR"), e("c", "PE"), e("d", "LIB"), e("e", "AR", 0), e("f", "SUD")];
+  assert.deepEqual(ordenarEventos(lista, ctx(["AR", "LIB", "SUD"])).map((x) => x.evento), ["b", "e", "d", "f", "a", "c"]);
+  assert.deepEqual(ordenarEventos(lista, ctx([])).map((x) => x.evento), ["a", "b", "c", "d", "f", "e"]); // sin orden: con señal antes en los empates
+  assert.deepEqual(ordenarEventos(lista, ctx(["AR"])).map((x) => x.evento), ["b", "e", "a", "c", "d", "f"]);
+});
+
+test("parsearAgenda: inicioMs sale de la fecha de la cabecera, la hora en UTC+1 y el cambio de día", () => {
+  const ev = parsearAgenda(agendaSinSenales);
+  assert.equal(ev[0].inicioMs, Date.UTC(2026, 9, 16, 13, 15)); // 14:15 UTC+1
+  const boca = ev.find((x) => x.evento.includes("Boca Juniors"));
+  assert.equal(boca.inicioMs, Date.UTC(2026, 9, 17, 0, 30)); // 01:30 UTC+1 ya es el día siguiente
+  assert.ok(ev.every((x, i) => i === 0 || x.inicioMs >= ev[i - 1].inicioMs), "la agenda queda en orden cronológico");
+  assert.equal(parsearAgenda("<ul class=\"menu\"></ul>").length, 0);
+  // sin fecha en la cabecera no se puede saber si ya terminó
+  const sinFecha = agendaSinSenales.replace(/Agenda - [^<]*/, "Agenda");
+  assert.ok(parsearAgenda(sinFecha).every((x) => x.inicioMs === null));
+});
+
+test("ordenarEventos: los que ya terminaron (inicio + duración) van al final, y el resto por hora", () => {
+  const ev = parsearAgenda(agendaSinSenales);
+  const nombres = (ctx) => ordenarEventos(ev, ctx).map((x) => x.evento.split(": ")[1]);
+  const base = { orden: [], duracionMs: 3 * 3600000 };
+  // 19:00 en UTC-3 = 22:00 UTC: terminaron los que empezaron hasta las 19:00 UTC (hora local 16:00 o antes)
+  const tarde = nombres({ ...base, ahora: Date.UTC(2026, 9, 16, 22, 0) });
+  assert.equal(tarde[0], "Los Chankas vs ADT"); // 17:30 locales, aún no terminó
+  assert.equal(tarde.indexOf("Al Quadisiya vs Abha"), 8); // 10:15 locales: terminó, va tras los 8 que siguen
+  assert.deepEqual(tarde.slice(8, 10), ["Al Quadisiya vs Abha", "Sport Huancayo vs Cusco"]); // los terminados, por hora
+  assert.equal(tarde.length, 15);
+  // justo cuando se cumplen las 3 h cuenta como terminado
+  const justo = nombres({ ...base, ahora: Date.UTC(2026, 9, 16, 16, 15) });
+  assert.equal(justo.at(-1), "Al Quadisiya vs Abha");
+  const antes = nombres({ ...base, ahora: Date.UTC(2026, 9, 16, 16, 14) });
+  assert.equal(antes[0], "Al Quadisiya vs Abha");
+  // sin terminados el orden es el de la agenda
+  assert.deepEqual(nombres({ ...base, ahora: Date.UTC(2026, 9, 16, 6, 0) }), ev.map((x) => x.evento.split(": ")[1]));
+});
+
+test("las etiquetas mandan después de lo terminado: un AR que terminó va tras los no terminados", () => {
+  const ev = parsearAgenda(agendaSinSenales);
+  const ctx = { orden: ["ARA"], ahora: Date.UTC(2026, 9, 16, 22, 0), duracionMs: 3 * 3600000 };
+  const lista = ordenarEventos(ev, ctx).map((x) => x.tipo);
+  assert.notEqual(lista[0], "ARA"); // el ARA ya terminó
+  assert.equal(lista.indexOf("ARA"), 8); // y es el primero de los terminados
+});
+
+test("duracionHoras: por defecto 3, acepta coma decimal y vuelve a 3 si el valor no vale", () => {
+  const con = (v) => { ajustes = v === undefined ? {} : { duracion: v }; return duracionHoras(); };
+  assert.equal(con(undefined), 3);
+  assert.equal(con("3"), 3);
+  assert.equal(con("2,5"), 2.5);
+  assert.equal(con("1.5"), 1.5);
+  assert.equal(con("0"), 3);
+  assert.equal(con("99"), 3);
+  assert.equal(con("mucho"), 3);
+  assert.equal(con(""), 3);
+  ajustes = {};
+});
+
+test("Inicio y En vivo usan la hora de ahora y la duración del ajuste", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    ahora = Date.UTC(2026, 9, 16, 22, 0); // las 19:00 en UTC-3
+    ajustes = {};
+    const items = (await home())[0].items;
+    assert.ok(items[0].title.includes("Los Chankas"));
+    assert.ok(items.at(-1).title.includes("Championship")); // el último de los terminados es el que más tarde empezó
+    assert.equal(items[8].title.split(" (")[0], "10:15 · Liga Profesional Saudí: Al Quadisiya vs Abha");
+    const cats = await liveCategories();
+    assert.deepEqual(cats.slice(0, 4).map((c) => c.title), ["Todos", "Liga 1", "Liga Profesional", "Primera División"]);
+    assert.equal(cats.at(-1).title, "Championship");
+    // con una duración de 12 h nada ha terminado y vuelve el orden de la agenda
+    ajustes = { duracion: "12" };
+    assert.ok((await home())[0].items[0].title.includes("Al Quadisiya"));
+  } finally {
+    ajustes = {};
+    ahora = AHORA_POR_DEFECTO;
+    agendaActiva = agenda;
+  }
+});
+
+test("mapaDeEtiquetas: etiqueta -> competiciones, sin repetir, en el orden de la agenda", () => {
+  const mapa = mapaDeEtiquetas(parsearAgenda(agendaSinSenales));
+  assert.equal(mapa.length, 11);
+  assert.ok(mapa.includes("AR: Liga Profesional"));
+  assert.ok(mapa.includes("ARA: Liga Profesional Saudí"));
+  assert.ok(mapa.includes("PE: Liga 1")); // dos eventos de Liga 1, una sola vez
+  assert.equal(mapa[0], "ARA: Liga Profesional Saudí");
+  const e = (n, tipo) => ({ evento: n, tipo, opciones: [] });
+  assert.deepEqual(mapaDeEtiquetas([e("Liga: a vs b", "AR"), e("Copa Argentina: c vs d", "AR"), e("Liga: e vs f", "AR")]), ["AR: Liga, Copa Argentina"]);
+});
+
+test("paginasDelMapa: reparte en páginas que caben en el límite", () => {
+  const entradas = Array.from({ length: 30 }, (_, i) => `ET${i}: Competición número ${i}`);
+  const paginas = paginasDelMapa(entradas, 100);
+  assert.ok(paginas.length > 1);
+  assert.ok(paginas.every((p) => p.length <= 100));
+  assert.deepEqual(paginas.join(" · ").split(" · "), entradas); // no se pierde ni se repite nada
+  assert.deepEqual(paginasDelMapa([], 100), []);
+  assert.ok(paginasDelMapa(["x".repeat(500)], 100)[0].length <= 100);
+});
+
+test("action mapa: muestra el mapa, no vacía nada y cicla las páginas cuando son varias", async () => {
+  almacen = {};
+  agendaActiva = agendaSinSenales;
+  try {
+    const r = await action("mapa");
+    assert.match(r.message, /AR: Liga Profesional/);
+    assert.match(r.message, /ARA: Liga Profesional Saudí/);
+    assert.ok(r.message.length <= 300);
+    assert.equal(r.clearSettings, undefined);
+    // una agenda con muchas competiciones se reparte en páginas y cada pulsación muestra la siguiente
+    const muchas = Array.from({ length: 25 }, (_, i) => `<li class="T${i}"><a href="#">Competición larga número ${i}: A vs B<span class="t">10:00</span></a><ul>\n</ul>\n</li>`).join("\n");
+    agendaActiva = `<ul class="menu"><b>Agenda - Viernes 16 de Octubre de 2026</b>${muchas}</ul>`;
+    almacen = {};
+    const p1 = await action("mapa");
+    const p2 = await action("mapa");
+    assert.match(p1.message, /\(1\/\d+\)/);
+    assert.match(p2.message, /\(2\/\d+\)/);
+    assert.ok(p1.message.length <= 300 && p2.message.length <= 300);
+    assert.notEqual(p1.message, p2.message);
+    // sin eventos
+    agendaActiva = agendaVacia;
+    assert.match((await action("mapa")).message, /No hay eventos/);
+  } finally {
+    almacen = {};
+    agendaActiva = agenda;
+  }
+});
+
+test("manifiesto: duración (texto, 3 por defecto) y botón del mapa", () => {
+  const por = Object.fromEntries(manifiesto.settings.map((x) => [x.key, x]));
+  assert.equal(por.duracion.type, "text");
+  assert.equal(por.duracion.default, "3");
+  assert.equal(por.mapa.type, "action");
+  assert.ok(!AJUSTES_A_VACIAR.includes("mapa") && !AJUSTES_A_VACIAR.includes("duracion"));
+  const conValor = manifiesto.settings.filter((x) => !["section", "status", "action"].includes(x.type));
+  assert.ok(conValor.length <= 12);
+  assert.equal(new Set(manifiesto.settings.map((x) => x.key)).size, manifiesto.settings.length);
+});
+test("orden de etiquetas en Inicio y En vivo: Todos y las competiciones siguen el ajuste", async () => {
+  agendaActiva = agendaSinSenales;
+  try {
+    ajustes = { orden: "MEX,AR" };
+    const items = (await home())[0].items;
+    assert.deepEqual(items.slice(0, 5).map((i) => i.badges[0]), ["MEX", "MEX", "MEX", "AR", "AR"]);
+    const cats = await liveCategories();
+    assert.deepEqual(cats.slice(0, 4).map((c) => c.title), ["Todos", "Liga MX", "Liga Profesional", "Liga Profesional Saudí"]);
+    const todos = (await liveChannels({ categoryId: "todos" })).items;
+    assert.ok(todos[0].title.includes("Liga MX"));
+    assert.equal(todos.length, 15);
+    const mx = (await liveChannels({ categoryId: cats[1].id })).items;
+    assert.equal(mx.length, 3);
+    ajustes = {};
+    const sinOrden = (await home())[0].items;
+    assert.ok(sinOrden[0].title.includes("Al Quadisiya")); // con señal primero, como antes
+  } finally {
+    ajustes = {};
+    agendaActiva = agenda;
+  }
+});
+
+test("manifiesto: el ajuste orden es un texto sin valor por defecto", () => {
+  const orden = manifiesto.settings.find((x) => x.key === "orden");
+  assert.equal(orden.type, "text");
+  assert.equal(orden.default, undefined);
+  assert.ok(orden.label.length <= 40 && orden.hint.length <= 80);
+  assert.ok(!AJUSTES_A_VACIAR.includes("orden"));
 });

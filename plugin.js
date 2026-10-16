@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.6.1";
+export const VERSION = "0.7.0";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -25,6 +25,8 @@ const PREFIJO_LEGADO = "ev:";
 // hora_local = hora + (UTC_del_visitante - 1). El ajuste "tz" (kino-plugin.json) es esa zona.
 const UTC_AGENDA = 1;
 const TZ_POR_DEFECTO = -3; // Argentina
+// Un evento "ya terminó" cuando pasaron DURACION horas desde su inicio (ajuste "duracion"); los terminados van al final.
+const DURACION_POR_DEFECTO = 3;
 
 // Un extractor por dominio del embed. Si el método de uno cambia, se escribe otra función con la
 // misma firma (embed) => Stream y se apunta aquí. `prioridad` ordena las señales de un evento: se
@@ -60,10 +62,52 @@ export function separarEvento(evento, tipo) {
     : { competicion: tipo || "Otros", partido: evento };
 }
 
-// Competiciones en el orden en que aparecen, cada una con sus eventos.
-export function agruparPorCompeticion(eventos) {
+// Etiquetas: los códigos que el sitio le pone a cada evento (AR, LIB, MEX…; el `tipo` de la agenda).
+// El ajuste "orden" las ordena a gusto de la persona: "AR,LIB,SUD" pone esas primero, en ese orden, y el resto
+// va detrás en el orden de la agenda (a medida que aparecen). Vacío = el orden de la agenda.
+export function ordenEtiquetas() {
+  const crudo = kino.config.get("orden");
+  return typeof crudo === "string" ? crudo.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) : [];
+}
+
+const rangoEtiqueta = (tipo, orden) => {
+  const i = orden.indexOf(String(tipo || "").toUpperCase());
+  return i < 0 ? orden.length : i;
+};
+
+// Horas que dura un partido (ajuste "duracion", texto). Un valor inválido o fuera de 0,5 a 12 vuelve al de siempre.
+export function duracionHoras() {
+  const n = Number(String(kino.config.get("duracion") ?? "").replace(",", "."));
+  return Number.isFinite(n) && n >= 0.5 && n <= 12 ? n : DURACION_POR_DEFECTO;
+}
+
+// Con qué se ordena: las etiquetas del ajuste, la hora de ahora y cuánto dura un partido. Sin contexto (ahora =
+// -Infinity) nada "ha terminado" y solo manda la etiqueta.
+const SIN_ORDEN = { orden: [], ahora: -Infinity, duracionMs: 0 };
+export const contextoOrden = () => ({ orden: ordenEtiquetas(), ahora: Date.now(), duracionMs: duracionHoras() * 3600000 });
+
+const haTerminado = (e, ctx) => e.inicioMs != null && e.inicioMs + ctx.duracionMs <= ctx.ahora;
+
+// Orden general: 1) los que ya terminaron al final, 2) etiquetas del ajuste "orden" (el resto, tras ellas, en el orden
+// de la agenda), 3) hora de inicio, 4) con señal antes que sin señal, 5) orden de la agenda. Así, si Kino recorta una
+// lista larga, lo que se pierde es lo que ya pasó.
+export function ordenarEventos(eventos, ctx = SIN_ORDEN) {
+  return eventos
+    .map((e, i) => ({ e, i, fin: haTerminado(e, ctx) ? 1 : 0, rango: rangoEtiqueta(e.tipo, ctx.orden) }))
+    .sort((a, b) =>
+      a.fin - b.fin ||
+      a.rango - b.rango ||
+      (a.e.inicioMs ?? 0) - (b.e.inicioMs ?? 0) ||
+      (b.e.opciones.length > 0) - (a.e.opciones.length > 0) ||
+      a.i - b.i)
+    .map((x) => x.e);
+}
+
+// Competiciones con sus eventos. Se ordenan los eventos (ver ordenarEventos) y cada competición toma el lugar de
+// su primer evento: así una competición sube o baja según su evento más prioritario.
+export function agruparPorCompeticion(eventos, ctx = SIN_ORDEN) {
   const grupos = new Map();
-  for (const e of eventos) {
+  for (const e of ordenarEventos(eventos, ctx)) {
     const { competicion, partido } = separarEvento(e.evento, e.tipo);
     if (!grupos.has(competicion)) grupos.set(competicion, { id: "co-" + hash(competicion), titulo: competicion, eventos: [] });
     grupos.get(competicion).eventos.push({ ...e, partido });
@@ -106,16 +150,10 @@ const itemEvento = (e, tz, conCompeticion = false) => ({
   badges: e.tipo ? [e.tipo] : undefined,
 });
 
-// "Todos": los eventos del día en el orden de la agenda, pero con los que tienen señal primero. Así, si Kino
-// recorta una lista larga, lo que se pierde es lo que de todos modos no se puede abrir.
-export function ordenarParaTodos(eventos) {
-  return [...eventos.filter((e) => e.opciones.length), ...eventos.filter((e) => !e.opciones.length)];
-}
-
 // Inicio: una sola fila con todos los eventos (sin separar por competición).
 export async function home() {
   const tz = zonaHoraria();
-  const eventos = ordenarParaTodos(await cargarAgenda());
+  const eventos = ordenarEventos(await cargarAgenda(), contextoOrden());
   if (!eventos.length) return [];
   return [{
     id: ID_TODOS,
@@ -128,7 +166,7 @@ export async function home() {
 export async function liveCategories() {
   const eventos = await cargarAgenda();
   if (!eventos.length) return [];
-  const grupos = agruparPorCompeticion(eventos).slice(0, 199);
+  const grupos = agruparPorCompeticion(eventos, contextoOrden()).slice(0, 199);
   return [
     { id: ID_TODOS, title: texto("Todos", "All"), genre: "deportes" },
     ...grupos.map((g) => ({ id: g.id, title: g.titulo, genre: "deportes" })),
@@ -139,7 +177,8 @@ export async function liveChannels({ categoryId }) {
   const tz = zonaHoraria();
   const eventos = await cargarAgenda();
   const todos = categoryId === ID_TODOS;
-  const lista = todos ? ordenarParaTodos(eventos) : agruparPorCompeticion(eventos).find((g) => g.id === categoryId)?.eventos;
+  const ctx = contextoOrden();
+  const lista = todos ? ordenarEventos(eventos, ctx) : agruparPorCompeticion(eventos, ctx).find((g) => g.id === categoryId)?.eventos;
   if (!lista) return { items: [] };
   return {
     items: lista.slice(0, 500).map((e, i) => ({
@@ -161,6 +200,7 @@ export async function liveChannels({ categoryId }) {
 export const AJUSTES_A_VACIAR = ["forzar"];
 
 export async function action(key) {
+  if (key === "mapa") return accionMapa();
   if (key !== "actualizar") return { message: texto("Listo", "Done") };
   const eventos = await cargarAgenda();
   const conSenal = eventos.filter((e) => e.opciones.length).length;
@@ -182,6 +222,54 @@ export async function action(key) {
     ),
     clearSettings: AJUSTES_A_VACIAR,
   };
+}
+
+// --- Ajustes: botón "Ver mapa de competiciones" ---------------------------------------------------------
+// En En vivo solo se ve el nombre de la competición, pero el ajuste "orden" pide la etiqueta (AR, LIB…). El botón
+// lista qué etiqueta tiene cada competición de la agenda de ahora. El mensaje de una acción admite 300 caracteres,
+// así que si no cabe se reparte en páginas: cada pulsación muestra la siguiente (la página se guarda en kino.storage).
+const MAX_PAGINA_MAPA = 230;
+
+export function mapaDeEtiquetas(eventos) {
+  const porEtiqueta = new Map();
+  for (const e of eventos) {
+    const tipo = String(e.tipo || "?").toUpperCase();
+    const { competicion } = separarEvento(e.evento, e.tipo);
+    if (!porEtiqueta.has(tipo)) porEtiqueta.set(tipo, []);
+    if (!porEtiqueta.get(tipo).includes(competicion)) porEtiqueta.get(tipo).push(competicion);
+  }
+  return [...porEtiqueta].map(([tipo, competiciones]) => `${tipo}: ${competiciones.join(", ")}`);
+}
+
+export function paginasDelMapa(entradas, max = MAX_PAGINA_MAPA) {
+  const paginas = [];
+  let actual = "";
+  for (const entrada of entradas) {
+    const corta = entrada.length > max ? entrada.slice(0, max - 1) + "…" : entrada;
+    if (actual && (actual + " · " + corta).length > max) {
+      paginas.push(actual);
+      actual = corta;
+    } else {
+      actual = actual ? actual + " · " + corta : corta;
+    }
+  }
+  if (actual) paginas.push(actual);
+  return paginas;
+}
+
+async function accionMapa() {
+  const eventos = await cargarAgenda();
+  const entradas = mapaDeEtiquetas(eventos);
+  if (!entradas.length) {
+    return { message: texto("No hay eventos en la agenda de hoy: todavía no hay etiquetas que mostrar.", "There are no events in today's schedule: no tags to show yet.") };
+  }
+  const paginas = paginasDelMapa(entradas);
+  kino.log("mapa de etiquetas v" + VERSION, entradas.length + " etiquetas", paginas.length + " páginas");
+  let n = Number(kino.storage.get("mapaPagina"));
+  if (!Number.isInteger(n) || n < 0 || n >= paginas.length) n = 0;
+  kino.storage.set("mapaPagina", String((n + 1) % paginas.length));
+  const pie = paginas.length > 1 ? ` (${n + 1}/${paginas.length}) ${texto("Pulsa otra vez para ver más.", "Press again for more.")}` : "";
+  return { message: paginas[n] + pie };
 }
 
 // --- resolve ---------------------------------------------------------------------------------------
@@ -299,8 +387,19 @@ function extraerPorRed({ referer } = {}) {
   };
 }
 
-// agenda.php: <li class="TIPO"><a href="#">Evento <span class="t">hora</span></a><ul>
+// agenda.php: <b>Agenda - Viernes 16 de Octubre de 2026</b>
+//   <li class="TIPO"><a href="#">Evento <span class="t">hora</span></a><ul>
 //   <li><a href="/eventos.html?r=BASE64">Opción <span>Calidad</span></a></li>…</ul></li>
+// Cada evento lleva `inicioMs` (UTC): la fecha de la cabecera + su hora en UTC+1. La agenda va en orden cronológico y
+// pasa de medianoche, así que cuando la hora baja respecto de la anterior es el día siguiente.
+const MESES = { enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5, julio: 6, agosto: 7, septiembre: 8, setiembre: 8, octubre: 9, noviembre: 10, diciembre: 11 };
+
+function fechaDeAgenda(html) {
+  const m = /Agenda[^<]*?(\d{1,2})\s+de\s+([A-Za-zñÑ]+)\s+de\s+(\d{4})/.exec(html);
+  const mes = m ? MESES[m[2].toLowerCase()] : undefined;
+  return mes === undefined ? null : Date.UTC(Number(m[3]), mes, Number(m[1]));
+}
+
 export function parsearAgenda(html) {
   const eventos = [];
   const reEvento = /<li class="([\w-]+)">\s*<a href="#">([\s\S]*?)<\/a>\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/g;
@@ -317,7 +416,19 @@ export function parsearAgenda(html) {
       hora: hora ? hora.trim() : null,
       evento: limpiar(cabecera.replace(/<span class="t">[\s\S]*?<\/span>/, "")),
       opciones,
+      inicioMs: null,
     });
+  }
+  const base = fechaDeAgenda(html);
+  let dia = 0;
+  let previo = -1;
+  for (const e of eventos) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(e.hora || "");
+    if (base === null || !m) continue;
+    const minutos = Number(m[1]) * 60 + Number(m[2]);
+    if (previo >= 0 && minutos < previo) dia++;
+    previo = minutos;
+    e.inicioMs = base + dia * 86400000 + minutos * 60000 - UTC_AGENDA * 3600000;
   }
   return eventos;
 }
