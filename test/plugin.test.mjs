@@ -171,16 +171,16 @@ test("En vivo: categoría \"Todos\" primero, luego una por competición, y un ca
   assert.deepEqual((await liveChannels({ categoryId: "no-existe" })).items, []);
 });
 
-test("resolve de un evento: prueba primero las señales que andan y deja spf24live al final", async () => {
+test("resolve de un evento: prueba las señales en el orden de la agenda y pasa a la siguiente si una falla", async () => {
   capturas = [];
   const filas = await home();
-  const s = await resolve(filas[0].items[0].ref); // TNT Sports (spf24live), Op2 (latamzy), Op3 (sudamericafy)
-  assert.deepEqual(capturas.map((c) => new URL(c.url).hostname), ["latamzy.com"]); // una sola captura
+  const s = await resolve(filas[0].items[0].ref); // TNT Sports (spf24live, el mock la hace fallar), Op2 (latamzy), Op3 (sudamericafy)
+  assert.deepEqual(capturas.map((c) => new URL(c.url).hostname), ["spf24live.st", "latamzy.com"]); // primero la de la agenda, luego la siguiente
   assert.equal(s.url, "https://cdn.example/x.m3u8?t=1");
   assert.equal(s.mime, "application/vnd.apple.mpegurl");
   assert.deepEqual(s.headers, { Referer: "https://p.example/", "User-Agent": "UA" });
   assert.equal(s.label, "TNT Sports Op2 Calidad 720p");
-  assert.deepEqual(s.alternatives.map((a) => a.label), ["TNT Sports Op3 Calidad 720p", "TNT Sports Calidad 720p"]);
+  assert.deepEqual(s.alternatives.map((a) => a.label), ["TNT Sports Calidad 720p", "TNT Sports Op3 Calidad 720p"]);
   assert.ok(s.alternatives.every((a) => a.ref.startsWith("https://") && a.ref.length <= 512));
 });
 

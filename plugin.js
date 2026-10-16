@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.3";
+export const VERSION = "0.7.4";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -29,17 +29,17 @@ const TZ_POR_DEFECTO = -3; // Argentina
 const DURACION_POR_DEFECTO = 3;
 
 // Un extractor por dominio del embed. Si el método de uno cambia, se escribe otra función con la
-// misma firma (embed) => Stream y se apunta aquí. `prioridad` ordena las señales de un evento: se
-// prueba primero la de número menor. Un dominio sin entrada usa extraerPorRed() con prioridad 5.
+// misma firma (embed) => Stream y se apunta aquí. Las señales de un evento se prueban en el orden en que las trae la
+// agenda. Un dominio sin entrada usa extraerPorRed().
 const EXTRACTORES = {
   // Sin Referer a propósito: el iframe de missflight.net solo sirve el reproductor si su Referer es
   // spf24live.st; un Referer puesto a la primera carga se le pasa también y responde "NOT ALLOWED".
   // En la app de Kino igual falla ("domain protected"), por eso va al final.
-  "spf24live.st": { extraer: extraerPorRed(), prioridad: 9 },
-  "latamzy.com": { extraer: extraerPorRed({ referer: BASE + "/" }), prioridad: 1 },
-  "sudamericafy.com": { extraer: extraerPorRed({ referer: BASE + "/" }), prioridad: 1 },
+  "spf24live.st": { extraer: extraerPorRed() },
+  "latamzy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
+  "sudamericafy.com": { extraer: extraerPorRed({ referer: BASE + "/" }) },
 };
-const POR_DEFECTO = { extraer: extraerPorRed(), prioridad: 5 };
+const POR_DEFECTO = { extraer: extraerPorRed() };
 const extractorDe = (embed) => EXTRACTORES[new URL(embed).hostname] ?? POR_DEFECTO;
 
 const texto = (es, en) => (String(kino.lang).startsWith("en") ? en : es);
@@ -338,11 +338,10 @@ async function resolverEventoLegado(ref) {
   return resolverSenales(senales);
 }
 
-// Prueba las señales por prioridad y devuelve la primera que anda. Las demás van como copias con etiqueta
+// Prueba las señales en el orden de la agenda y devuelve la primera que anda. Las demás van como copias con etiqueta
 // (menú "Servidor"): Kino las resuelve solo si la persona las elige o si esta falla.
 async function resolverSenales(lista) {
   const senales = lista.map((s) => ({ n: s.n.slice(0, 48), e: s.e }));
-  senales.sort((a, b) => prioridadDe(a.e) - prioridadDe(b.e));
   for (const [i, senal] of senales.entries()) {
     try {
       const stream = await resolverSenal(senal.e);
@@ -361,14 +360,6 @@ async function resolverSenales(lista) {
       "None of this event's signals could be opened right now. Try again later.",
     ),
   });
-}
-
-function prioridadDe(embed) {
-  try {
-    return extractorDe(embed).prioridad;
-  } catch {
-    return 99;
-  }
 }
 
 // Una señal (el embed de un servidor): se resuelve con el extractor de su dominio.
