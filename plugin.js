@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const MAX_FILAS = 20;
@@ -86,22 +86,50 @@ const tituloEvento = (e, tz) => {
 // El ref del canal lleva todas sus señales, para resolver sin volver a pedir la agenda.
 const refEvento = (e) => PREFIJO_EVENTO + JSON.stringify(e.opciones.map((o) => ({ n: o.texto, e: o.embed })));
 
-// Inicio: una fila por competición; cada evento es una tarjeta live.
+const itemEvento = (e, tz) => ({
+  id: idEvento(e),
+  ref: refEvento(e),
+  title: tituloEvento(e, tz),
+  kind: "live",
+  overview: e.evento,
+  badges: e.tipo ? [e.tipo] : undefined,
+});
+
+// Una fila por competición; cada evento es una tarjeta live.
+const filaDeGrupo = (g, tz) => ({ id: g.id, title: g.titulo, items: g.eventos.map((e) => itemEvento(e, tz)) });
+
+// Inicio: una fila por competición.
 export async function home() {
   const tz = zonaHoraria();
   const grupos = agruparPorCompeticion(await cargarAgenda());
-  return grupos.slice(0, MAX_FILAS).map((g) => ({
-    id: g.id,
-    title: g.titulo,
-    items: g.eventos.map((e) => ({
-      id: idEvento(e),
-      ref: refEvento(e),
-      title: tituloEvento(e, tz),
-      kind: "live",
-      overview: e.evento,
-      badges: e.tipo ? [e.tipo] : undefined,
-    })),
-  }));
+  return grupos.slice(0, MAX_FILAS).map((g) => filaDeGrupo(g, tz));
+}
+
+// Sección propia (chip arriba de Inicio en el celular): pestaña "Todos" con una fila por competición y una
+// pestaña por cada competición (Kino admite 8 pestañas como máximo).
+const MAX_PESTANAS = 8;
+export async function section({ tab }) {
+  const tz = zonaHoraria();
+  const grupos = agruparPorCompeticion(await cargarAgenda());
+  const tabs = [
+    { id: "todos", label: texto("Todos", "All") },
+    ...grupos.slice(0, MAX_PESTANAS - 1).map((g) => ({ id: g.id, label: g.titulo.slice(0, 24) })),
+  ];
+  const grupo = grupos.find((g) => g.id === tab);
+  const elegida = grupo ? tab : "todos";
+  const rows = grupo ? [filaDeGrupo(grupo, tz)] : grupos.slice(0, MAX_FILAS).map((g) => filaDeGrupo(g, tz));
+  return {
+    tabs,
+    tab: elegida,
+    hero: {
+      title: texto("Eventos en vivo", "Live events"),
+      text: texto(
+        `Agenda de alangulotv. Horas en UTC${tz >= 0 ? "+" : "−"}${Math.abs(tz)}; puedes cambiar la zona en los ajustes del plugin.`,
+        `alangulotv schedule. Times in UTC${tz >= 0 ? "+" : "−"}${Math.abs(tz)}; you can change the zone in the plugin settings.`,
+      ),
+    },
+    rows,
+  };
 }
 
 // Pestaña "En vivo": cada competición es una categoría y sus eventos son los canales.

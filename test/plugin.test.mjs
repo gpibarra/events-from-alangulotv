@@ -34,7 +34,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, section, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -111,6 +111,28 @@ test("manifiesto: el ajuste tz es un select con default -3 y su default es una d
   assert.ok(tz.options.some((o) => o.value === tz.default));
   assert.ok(tz.options.length <= 20);
   assert.ok(tz.hint.length <= 80);
+});
+
+test("section: pestaña Todos con una fila por competición y una pestaña por competición", async () => {
+  ajustes = {};
+  const todos = await section({ tab: null });
+  assert.equal(todos.tab, "todos");
+  assert.deepEqual(todos.tabs.map((t) => t.label), ["Todos", "Liga Profesional", "Copa Colombia", "Copa Libertadores"]);
+  assert.ok(todos.tabs.length <= 8 && todos.tabs.every((t) => ID_VALIDO.test(t.id) && t.label.length <= 24));
+  assert.equal(todos.rows.length, 3);
+  assert.ok(todos.hero.text.length <= 300 && todos.hero.text.includes("UTC−3"));
+  const una = await section({ tab: todos.tabs[3].id });
+  assert.equal(una.tab, todos.tabs[3].id);
+  assert.deepEqual(una.rows.map((r) => r.title), ["Copa Libertadores"]);
+  assert.equal(una.rows[0].items[0].title, "21:30 · Estudiantes LP vs Flamengo");
+  assert.equal((await section({ tab: "no-existe" })).tab, "todos");
+  ajustes = { tz: "-5" };
+  assert.ok((await section({ tab: null })).hero.text.includes("UTC−5"));
+  ajustes = {};
+});
+
+test("manifiesto: la sección tiene etiqueta de 1 a 20 caracteres", () => {
+  assert.ok(manifiesto.section.label.length >= 1 && manifiesto.section.label.length <= 20);
 });
 
 test("En vivo: una categoría por competición y un canal por evento", async () => {
