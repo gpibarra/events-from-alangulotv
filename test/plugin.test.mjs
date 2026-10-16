@@ -6,6 +6,7 @@ const agenda = readFileSync(new URL("./agenda.fixture.html", import.meta.url), "
 const pedidos = [];
 let capturas = [];
 let ajustes = {};
+let fallaAgenda = false;
 
 globalThis.kino = {
   lang: "es-CO",
@@ -14,6 +15,7 @@ globalThis.kino = {
   error: (code, message, options) => Object.assign(new Error(message), { code, options }),
   fetch: async (url, options) => {
     pedidos.push({ url, options });
+    if (fallaAgenda) return { ok: false, status: 503, text: () => "" };
     return { ok: true, status: 200, text: () => agenda };
   },
   browser: {
@@ -34,7 +36,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, action, AJUSTES_A_VACIAR, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -111,6 +113,34 @@ test("manifiesto: el ajuste tz es un select con default -3 y su default es una d
   assert.ok(tz.options.some((o) => o.value === tz.default));
   assert.ok(tz.options.length <= 20);
   assert.ok(tz.hint.length <= 80);
+});
+
+test("action actualizar: lee la agenda y vacía solo la bandera `forzar`, nunca la zona horaria", async () => {
+  fallaAgenda = false;
+  const r = await action("actualizar");
+  assert.deepEqual(r.clearSettings, ["forzar"]);
+  assert.ok(!r.clearSettings.includes("tz") && !AJUSTES_A_VACIAR.includes("tz"));
+  assert.match(r.message, /3 eventos en 3 competiciones/);
+  assert.ok(r.message.length <= 300);
+});
+
+test("action: si la agenda no se puede leer, lanza error y no vacía nada", async () => {
+  fallaAgenda = true;
+  await assert.rejects(action("actualizar"), (e) => e.code === "unavailable");
+  fallaAgenda = false;
+});
+
+test("action: una clave desconocida no vacía nada", async () => {
+  const r = await action("otra");
+  assert.equal(r.clearSettings, undefined);
+});
+
+test("manifiesto: el botón y la bandera existen y la bandera es un toggle sin default propio", () => {
+  const por = Object.fromEntries(manifiesto.settings.map((x) => [x.key, x]));
+  assert.equal(por.actualizar.type, "action");
+  assert.equal(por.forzar.type, "toggle");
+  assert.ok(AJUSTES_A_VACIAR.every((k) => por[k] && por[k].type !== "action" && por[k].type !== "section"));
+  assert.ok(manifiesto.settings.every((x) => x.label.length <= 40 && (!x.hint || x.hint.length <= 80)));
 });
 
 test("En vivo: una categoría por competición y un canal por evento", async () => {

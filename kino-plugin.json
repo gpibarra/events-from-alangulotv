@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -89,6 +89,18 @@
         }
       ],
       "hint": "Zona en que se muestran las horas (la agenda viene en UTC+1)."
+    },
+    {
+      "key": "actualizar",
+      "label": "Actualizar eventos ahora",
+      "type": "action",
+      "hint": "Lee la agenda y fuerza a Kino a pedirla de nuevo."
+    },
+    {
+      "key": "forzar",
+      "label": "Forzar actualización de eventos",
+      "type": "toggle",
+      "hint": "Lo usa el botón de arriba y se apaga solo. No hace falta tocarlo."
     }
   ]
 }

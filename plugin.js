@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.4.1";
+export const VERSION = "0.5.0";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 const MAX_FILAS = 20;
@@ -124,6 +124,28 @@ export async function liveChannels({ categoryId }) {
       categoryId,
       number: i + 1,
     })),
+  };
+}
+
+// --- Ajustes: botón "Actualizar eventos ahora" ---------------------------------------------------------
+// Kino guarda las filas de Inicio 6 h y las listas de En vivo 1 h, y el plugin no puede borrarlas. Lo que sí
+// hace Kino al vaciar un ajuste desde una acción es cerrar el sandbox y olvidar las filas de Inicio guardadas
+// (igual que al guardar cualquier cambio). Por eso el botón vacía el ajuste "forzar", que no sirve para nada
+// más: NUNCA debe incluir "tz" (volvería a UTC-3). Si la agenda no se puede leer, la acción lanza error y
+// Kino no vacía nada.
+export const AJUSTES_A_VACIAR = ["forzar"];
+
+export async function action(key) {
+  if (key !== "actualizar") return { message: texto("Listo", "Done") };
+  const eventos = await cargarAgenda();
+  const competiciones = agruparPorCompeticion(eventos).length;
+  kino.log("actualización forzada v" + VERSION, eventos.length + " eventos", competiciones + " competiciones");
+  return {
+    message: texto(
+      `Agenda leída: ${eventos.length} eventos en ${competiciones} competiciones. Kino volverá a pedirla.`,
+      `Schedule read: ${eventos.length} events in ${competiciones} competitions. Kino will ask for it again.`,
+    ),
+    clearSettings: AJUSTES_A_VACIAR,
   };
 }
 
