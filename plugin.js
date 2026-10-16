@@ -8,10 +8,12 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.6.0";
+export const VERSION = "0.6.1";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
-const MAX_FILAS = 20;
+// Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
+const MAX_ITEMS_FILA = 60;
+const ID_TODOS = "todos";
 // El ref de un canal es solo el id del evento: resolve vuelve a leer la agenda y usa las señales de ese
 // momento, así un evento que el sitio listó sin enlaces funciona en cuanto los publica.
 const PREFIJO_EVENTO = "evt:";
@@ -84,48 +86,65 @@ export function convertirHora(hhmm, tz) {
 }
 
 const idEvento = (e) => "ev-" + hash(e.evento);
-const tituloEvento = (e, tz) => {
+
+// En una lista mezclada ("Todos") el título lleva la competición; dentro de una competición, no.
+const tituloEvento = (e, tz, conCompeticion = false) => {
   const hora = convertirHora(e.hora, tz);
+  const nombre = conCompeticion ? e.evento : (e.partido ?? separarEvento(e.evento, e.tipo).partido);
   const aviso = e.opciones.length ? "" : texto(" (sin señal aún)", " (no signal yet)");
-  return (hora ? hora + " · " : "") + e.partido + aviso;
+  return (hora ? hora + " · " : "") + nombre + aviso;
 };
 
 const refEvento = (e) => PREFIJO_EVENTO + idEvento(e);
 
-const itemEvento = (e, tz) => ({
+const itemEvento = (e, tz, conCompeticion = false) => ({
   id: idEvento(e),
   ref: refEvento(e),
-  title: tituloEvento(e, tz),
+  title: tituloEvento(e, tz, conCompeticion),
   kind: "live",
   overview: e.evento,
   badges: e.tipo ? [e.tipo] : undefined,
 });
 
-// Una fila por competición; cada evento es una tarjeta live.
-const filaDeGrupo = (g, tz) => ({ id: g.id, title: g.titulo, items: g.eventos.map((e) => itemEvento(e, tz)) });
-
-// Inicio: una fila por competición.
-export async function home() {
-  const tz = zonaHoraria();
-  const grupos = agruparPorCompeticion(await cargarAgenda());
-  return grupos.slice(0, MAX_FILAS).map((g) => filaDeGrupo(g, tz));
+// "Todos": los eventos del día en el orden de la agenda, pero con los que tienen señal primero. Así, si Kino
+// recorta una lista larga, lo que se pierde es lo que de todos modos no se puede abrir.
+export function ordenarParaTodos(eventos) {
+  return [...eventos.filter((e) => e.opciones.length), ...eventos.filter((e) => !e.opciones.length)];
 }
 
-// Pestaña "En vivo": cada competición es una categoría y sus eventos son los canales.
+// Inicio: una sola fila con todos los eventos (sin separar por competición).
+export async function home() {
+  const tz = zonaHoraria();
+  const eventos = ordenarParaTodos(await cargarAgenda());
+  if (!eventos.length) return [];
+  return [{
+    id: ID_TODOS,
+    title: texto("Todos los eventos", "All events"),
+    items: eventos.slice(0, MAX_ITEMS_FILA).map((e) => itemEvento(e, tz, true)),
+  }];
+}
+
+// Pestaña "En vivo": la categoría "Todos" primero y después una categoría por competición.
 export async function liveCategories() {
-  const grupos = agruparPorCompeticion(await cargarAgenda());
-  return grupos.slice(0, 200).map((g) => ({ id: g.id, title: g.titulo, genre: "deportes" }));
+  const eventos = await cargarAgenda();
+  if (!eventos.length) return [];
+  const grupos = agruparPorCompeticion(eventos).slice(0, 199);
+  return [
+    { id: ID_TODOS, title: texto("Todos", "All"), genre: "deportes" },
+    ...grupos.map((g) => ({ id: g.id, title: g.titulo, genre: "deportes" })),
+  ];
 }
 
 export async function liveChannels({ categoryId }) {
   const tz = zonaHoraria();
-  const grupos = agruparPorCompeticion(await cargarAgenda());
-  const grupo = grupos.find((g) => g.id === categoryId);
-  if (!grupo) return { items: [] };
+  const eventos = await cargarAgenda();
+  const todos = categoryId === ID_TODOS;
+  const lista = todos ? ordenarParaTodos(eventos) : agruparPorCompeticion(eventos).find((g) => g.id === categoryId)?.eventos;
+  if (!lista) return { items: [] };
   return {
-    items: grupo.eventos.map((e, i) => ({
+    items: lista.slice(0, 500).map((e, i) => ({
       id: idEvento(e),
-      title: tituloEvento(e, tz),
+      title: tituloEvento(e, tz, todos),
       ref: refEvento(e),
       categoryId,
       number: i + 1,

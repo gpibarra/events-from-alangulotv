@@ -40,7 +40,7 @@ globalThis.kino = {
 };
 
 const {
-  home, resolve, action, AJUSTES_A_VACIAR, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
+  home, resolve, action, AJUSTES_A_VACIAR, ordenarParaTodos, parsearAgenda, liveCategories, liveChannels, separarEvento, agruparPorCompeticion,
   convertirHora, BASE, VERSION,
 } = await import("../plugin.js");
 const manifiesto = JSON.parse(readFileSync(new URL("../kino-plugin.json", import.meta.url), "utf8"));
@@ -87,26 +87,27 @@ test("convertirHora: la agenda viene en UTC+1", () => {
   assert.equal(convertirHora("a las 9", -3), "a las 9");
 });
 
-test("home: una fila por competición con un canal live por evento", async () => {
+test("home: una sola fila \"Todos los eventos\", con la competición en el título", async () => {
   ajustes = {};
   const filas = await home();
   assert.equal(pedidos.at(-1).url, BASE + "/agenda.php");
-  assert.deepEqual(filas.map((f) => f.title), ["Liga Profesional", "Copa Colombia", "Copa Libertadores"]);
-  const items = filas.flatMap((f) => f.items);
+  assert.equal(filas.length, 1);
+  assert.equal(filas[0].title, "Todos los eventos");
+  const items = filas[0].items;
   assert.equal(items.length, 3);
   assert.equal(new Set(items.map((i) => i.id)).size, 3);
-  for (const id of [...items.map((i) => i.id), ...filas.map((f) => f.id)]) assert.match(id, ID_VALIDO);
+  for (const id of [...items.map((i) => i.id), filas[0].id]) assert.match(id, ID_VALIDO);
   assert.ok(items.every((i) => i.kind === "live" && i.ref.startsWith("evt:") && i.ref.length < 64));
-  assert.equal(items[0].title, "20:00 · Huracán vs Gimnasia La Plata"); // UTC-3 por defecto
+  assert.equal(items[0].title, "20:00 · Liga Profesional: Huracán vs Gimnasia La Plata"); // UTC-3 por defecto
 });
 
 test("zona horaria: por defecto -3, el ajuste tz la cambia y un valor inválido se ignora", async () => {
   ajustes = { tz: "-5" };
-  assert.equal((await home())[0].items[0].title, "18:00 · Huracán vs Gimnasia La Plata");
+  assert.equal((await home())[0].items[0].title, "18:00 · Liga Profesional: Huracán vs Gimnasia La Plata");
   ajustes = { tz: "basura" };
-  assert.equal((await home())[0].items[0].title, "20:00 · Huracán vs Gimnasia La Plata");
+  assert.equal((await home())[0].items[0].title, "20:00 · Liga Profesional: Huracán vs Gimnasia La Plata");
   ajustes = { tz: "99" };
-  assert.equal((await home())[0].items[0].title, "20:00 · Huracán vs Gimnasia La Plata");
+  assert.equal((await home())[0].items[0].title, "20:00 · Liga Profesional: Huracán vs Gimnasia La Plata");
   ajustes = {};
 });
 
@@ -147,15 +148,20 @@ test("manifiesto: el botón y la bandera existen y la bandera es un toggle sin d
   assert.ok(manifiesto.settings.every((x) => x.label.length <= 40 && (!x.hint || x.hint.length <= 80)));
 });
 
-test("En vivo: una categoría por competición y un canal por evento", async () => {
+test("En vivo: categoría \"Todos\" primero, luego una por competición, y un canal por evento", async () => {
   const cats = await liveCategories();
-  assert.deepEqual(cats.map((c) => c.title), ["Liga Profesional", "Copa Colombia", "Copa Libertadores"]);
+  assert.deepEqual(cats.map((c) => c.title), ["Todos", "Liga Profesional", "Copa Colombia", "Copa Libertadores"]);
   assert.ok(cats.every((c) => c.genre === "deportes" && ID_VALIDO.test(c.id)));
-  const { items } = await liveChannels({ categoryId: cats[0].id });
+  assert.equal(new Set(cats.map((c) => c.id)).size, cats.length);
+  const todos = (await liveChannels({ categoryId: cats[0].id })).items;
+  assert.equal(todos.length, 3);
+  assert.equal(todos[0].title, "20:00 · Liga Profesional: Huracán vs Gimnasia La Plata");
+  const { items } = await liveChannels({ categoryId: cats[1].id });
   assert.equal(items.length, 1);
   assert.equal(items[0].title, "20:00 · Huracán vs Gimnasia La Plata");
-  assert.equal(items[0].categoryId, cats[0].id);
+  assert.equal(items[0].categoryId, cats[1].id);
   assert.match(items[0].ref, /^evt:/);
+  assert.equal(items[0].id, todos[0].id); // el mismo evento tiene el mismo id en "Todos" y en su competición
   assert.deepEqual((await liveChannels({ categoryId: "no-existe" })).items, []);
 });
 
@@ -227,21 +233,42 @@ test("VERSION de plugin.js coincide con kino-plugin.json", () => {
   assert.equal(VERSION, manifiesto.version);
 });
 
-test("agenda con eventos sin señal: se muestran todos, con aviso, y solo los que tienen señal son abribles", async () => {
+test("agenda con eventos sin señal: se muestran todos, los que tienen señal primero, y solo esos son abribles", async () => {
   agendaActiva = agendaSinSenales;
   try {
     ajustes = {};
     const filas = await home();
-    const items = filas.flatMap((f) => f.items);
+    assert.equal(filas.length, 1);
+    const items = filas[0].items;
     assert.equal(items.length, 15);
     assert.equal(new Set(items.map((i) => i.id)).size, 15);
     assert.equal(items.filter((i) => i.title.endsWith("(sin señal aún)")).length, 14);
-    const saudi = items.find((i) => i.title.includes("Al Quadisiya"));
-    assert.equal(saudi.title, "10:15 · Al Quadisiya vs Abha"); // 14:15 UTC+1 -> UTC-3
-    assert.ok(!saudi.title.includes("sin señal"));
-    assert.ok(filas.length <= 20);
+    assert.equal(items[0].title, "10:15 · Liga Profesional Saudí: Al Quadisiya vs Abha"); // 14:15 UTC+1 -> UTC-3
+    assert.ok(items.slice(1).every((i) => i.title.endsWith("(sin señal aún)")), "los sin señal van al final");
     const cats = await liveCategories();
-    assert.equal(cats.length, filas.length);
+    assert.equal(cats.length, 12); // Todos + 11 competiciones
+    assert.equal(cats[0].title, "Todos");
+  } finally {
+    agendaActiva = agenda;
+  }
+});
+
+test("ordenarParaTodos: los que tienen señal primero y el orden de la agenda se conserva", () => {
+  const e = (n, senales) => ({ evento: n, opciones: new Array(senales).fill({}) });
+  assert.deepEqual(ordenarParaTodos([e("a", 0), e("b", 1), e("c", 0), e("d", 2)]).map((x) => x.evento), ["b", "d", "a", "c"]);
+});
+
+test("límites: la fila de Inicio se corta en 60 y En vivo \"Todos\" lista todos", async () => {
+  const evento = (n) => `<li class="AR"><a href="#">Liga: Equipo ${n} vs Rival ${n}<span class="t">10:00</span></a><ul>\n</ul>\n</li>`;
+  agendaActiva = `<ul class="menu">${Array.from({ length: 70 }, (_, i) => evento(i)).join("\n")}</ul>`;
+  try {
+    const filas = await home();
+    assert.equal(filas[0].items.length, 60);
+    assert.equal(new Set(filas[0].items.map((i) => i.id)).size, 60);
+    const cats = await liveCategories();
+    assert.deepEqual(cats.map((c) => c.title), ["Todos", "Liga"]);
+    assert.equal((await liveChannels({ categoryId: "todos" })).items.length, 70);
+    assert.equal((await liveChannels({ categoryId: cats[1].id })).items.length, 70);
   } finally {
     agendaActiva = agenda;
   }

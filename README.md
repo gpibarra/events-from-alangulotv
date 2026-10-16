@@ -30,7 +30,7 @@ node sdk/run.mjs . home          # ejecuta home() contra la agenda real
 node --test test/plugin.test.mjs
 ```
 
-**Estructura:** categoría = competición (texto antes de los «:»), canal = evento, y las señales del evento son copias con etiqueta (menú «Servidor»). **Zona horaria:** ajuste `tz` (por defecto UTC−3); la agenda viene en UTC+1. **Actualizar:** el botón «Actualizar eventos ahora» lee la agenda y vacía el ajuste `forzar`, lo que hace que Kino olvide las filas de Inicio guardadas.
+**Estructura:** Inicio muestra una sola fila «Todos los eventos»; En vivo tiene la categoría «Todos» y una por competición (texto antes de los «:»). Cada evento es un canal y sus señales son copias con etiqueta (menú «Servidor»). Los eventos con señal van primero. **Zona horaria:** ajuste `tz` (por defecto UTC−3); la agenda viene en UTC+1. **Actualizar:** el botón «Actualizar eventos ahora» lee la agenda y vacía el ajuste `forzar`, lo que hace que Kino olvide las filas de Inicio guardadas.
 
 `kino.browser.capture` (usado en `resolve`) solo funciona dentro de la app; el kit de Node lo simula en los tests.
 
