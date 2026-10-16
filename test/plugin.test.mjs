@@ -248,9 +248,8 @@ test("agenda con eventos sin señal: se muestran todos, los que tienen señal pr
     const items = filas[0].items;
     assert.equal(items.length, 15);
     assert.equal(new Set(items.map((i) => i.id)).size, 15);
-    assert.equal(items.filter((i) => i.title.endsWith("(sin señal aún)")).length, 14);
+    assert.ok(items.every((i) => !/sin señal|no signal/.test(i.title)), "el título no lleva aviso");
     assert.equal(items[0].title, "10:15 · Liga Profesional Saudí: Al Quadisiya vs Abha"); // 14:15 UTC+1 -> UTC-3
-    assert.ok(items.slice(1).every((i) => i.title.endsWith("(sin señal aún)")), "los sin señal van al final");
     const cats = await liveCategories();
     assert.equal(cats.length, 12); // Todos + 11 competiciones
     assert.equal(cats[0].title, "Todos");

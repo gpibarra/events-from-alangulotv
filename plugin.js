@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.1";
+export const VERSION = "0.7.2";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -139,8 +139,7 @@ const idEvento = (e) => "ev-" + hash(e.evento);
 const tituloEvento = (e, tz, conCompeticion = false) => {
   const hora = convertirHora(e.hora, tz);
   const nombre = conCompeticion ? e.evento : (e.partido ?? separarEvento(e.evento, e.tipo).partido);
-  const aviso = e.opciones.length ? "" : texto(" (sin señal aún)", " (no signal yet)");
-  return (hora ? hora + " · " : "") + nombre + aviso;
+  return (hora ? hora + " · " : "") + nombre;
 };
 
 const refEvento = (e) => PREFIJO_EVENTO + idEvento(e);
