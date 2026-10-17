@@ -1,29 +1,29 @@
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 
-const ARCHIVO = 'output/streams.json';
-const indice = process.argv[2];
+const FILE = 'output/streams.json';
+const index = process.argv[2];
 
-const streams = JSON.parse(await readFile(ARCHIVO, 'utf8'));
+const streams = JSON.parse(await readFile(FILE, 'utf8'));
 
-if (indice === undefined) {
+if (index === undefined) {
   streams.forEach((s, i) => {
-    console.log(`${String(i).padStart(2)} ${s.stream ? '✔' : '✘'} ${s.evento} | ${s.texto}`);
+    console.log(`${String(i).padStart(2)} ${s.stream ? '✔' : '✘'} ${s.name} | ${s.label}`);
   });
-  console.log('\nUso: npm run open -- <número>');
+  console.log('\nUsage: npm run open -- <number>');
   process.exit(0);
 }
 
-const s = streams[Number(indice)];
+const s = streams[Number(index)];
 if (!s?.stream) {
-  console.error(`El índice ${indice} no existe o no tiene m3u8`);
+  console.error(`Index ${index} does not exist or has no m3u8`);
   process.exit(1);
 }
 
 const { m3u8, referer, userAgent } = s.stream;
-console.log(`Abriendo en VLC: ${s.evento} | ${s.texto}`);
-// Las opciones van tras la URL (como opciones del medio): como opciones globales
-// VLC ignora --http-user-agent y envía su propio UA, que el servidor rechaza con 403.
+console.log(`Opening in VLC: ${s.name} | ${s.label}`);
+// The options go after the URL (as media options): as global options
+// VLC ignores --http-user-agent and sends its own UA, which the server rejects with 403.
 spawn('vlc', [m3u8, `:http-referrer=${referer}`, `:http-user-agent=${userAgent}`], {
   detached: true,
   stdio: 'ignore',

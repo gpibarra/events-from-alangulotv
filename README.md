@@ -17,14 +17,14 @@ npm run schedule -- <url> <prefijo>   # URL y prefijo de href personalizados
 El resultado se guarda en `output/links.json`.
 
 ```bash
-npm run streams                  # abre cada embed en Chrome y guarda los m3u8 en output/streams.json
+npm run streams                  # abre cada embed en Chrome (sin ventana; SHOW_WINDOW=1 la muestra) y guarda los m3u8 en output/streams.json
 npm run open                     # lista los streams
 npm run open -- <número>         # abre uno en VLC con sus headers
 npm run hosts                    # compara los dominios de output/streams.json con los del plugin
 npm run all                      # schedule + streams + hosts
 ```
 
-`npm run hosts` revisa tres cosas: que cada servidor de la agenda (embed) tenga métodos en `EXTRACTORES` y esté en `hosts` (si no, es un error y termina con código 1); que el reproductor (el iframe que pide el m3u8) esté en `hosts`, porque si no Kino le pregunta a la persona si lo permite. Los servidores de video solo se listan: no se declaran a propósito. Ojo: que Chrome encuentre un m3u8 no significa que el canal esté transmitiendo, porque la captura toma la petición aunque responda 404.
+`npm run hosts` revisa tres cosas: que cada servidor de la agenda (embed) tenga métodos en `EXTRACTORS` y esté en `hosts` (si no, es un error y termina con código 1); que el reproductor (el iframe que pide el m3u8) esté en `hosts`, porque si no Kino le pregunta a la persona si lo permite. Los servidores de video solo se listan: no se declaran a propósito. Ojo: que Chrome encuentre un m3u8 no significa que el canal esté transmitiendo, porque la captura toma la petición aunque responda 404.
 
 ## Plugin de Kino
 
@@ -40,25 +40,31 @@ node --test test/plugin.test.mjs
 
 Al abrir un evento, el plugin prueba sus señales **en el orden de la agenda** y reproduce la primera que funciona. Las demás se devuelven como copias, pero Kino ignora las copias en los canales en vivo: no hay menú «Servidor» para elegirlas a mano, y si una señal falla el plugin pasa solo a la siguiente.
 
-Cada dominio de embed tiene en `EXTRACTORES` (`plugin.js`) una **lista de métodos** que se prueban en orden:
+Cada dominio de embed tiene en `EXTRACTORS` (`plugin.js`) una **lista de métodos** que se prueban en orden:
 
 | Embed | Métodos | Cómo |
 |---|---|---|
-| `spf24live.st` | descifrado | Lee con `kino.fetch` el iframe del reproductor (`missflight.net`, ahora `tossequip.net`; Referer `spf24live.st`, User-Agent de Chrome) y descifra el m3u8 de `window._econfig`. El navegador oculto no sirve: el reproductor rechaza el User-Agent del WebView de Android (`; wv`). |
-| `latamzy.com` | directo, navegador | Directo: el reproductor `streamtp99a.sbs/global1.php?stream=…` trae el m3u8 en texto plano (`playbackURL`). |
-| `sudamericafy.com` | directo, navegador | Directo: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`). |
+| `spf24live.st` | `decrypt` | Lee con `kino.fetch` el iframe del reproductor (`missflight.net`, ahora `tossequip.net`; Referer `spf24live.st`, User-Agent de Chrome) y descifra el m3u8 de `window._econfig`. El navegador oculto no sirve: el reproductor rechaza el User-Agent del WebView de Android (`; wv`). |
+| `latamzy.com` | `direct`, `browser` | `direct`: el reproductor `streamtp99a.sbs/global1.php?stream=…` trae el m3u8 en texto plano (`playbackURL`). |
+| `sudamericafy.com` | `direct`, `browser` | `direct`: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`). |
 
-El método «navegador» usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
+El método `browser` usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
 
-Todos los métodos, también el navegador, **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), el navegador la «captura» aunque no responda, y Kino reintentaría ese m3u8 sin pasar a otra señal. Si responde un error, no contesta en 8 s o no es una lista HLS, la señal se descarta (sin probar otro método de ese servidor, que vería el mismo canal apagado) y se prueba la siguiente. Los servidores de video (`*.fubo18.com`, `*.domhsd.com`…) cambian seguido, así que no están en `hosts`: reproducirlos no lo necesita (`"streamHosts": "any"`), y para la comprobación Kino le pregunta a la persona si permite cada uno (hasta 3 preguntas por llamada). Si no lo permite, el m3u8 se devuelve sin comprobar.
+Todos los métodos, también `browser`, **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), el navegador la «captura» aunque no responda, y Kino reintentaría ese m3u8 sin pasar a otra señal. Si responde un error, no contesta en 8 s o no es una lista HLS, la señal se descarta (sin probar otro método de ese servidor, que vería el mismo canal apagado) y se prueba la siguiente. Los servidores de video (`*.fubo18.com`, `*.domhsd.com`…) cambian seguido, así que no están en `hosts`: reproducirlos no lo necesita (`"streamHosts": "any"`), y para la comprobación Kino le pregunta a la persona si permite cada uno (hasta 3 preguntas por llamada). Si no lo permite, el m3u8 se devuelve sin comprobar.
 
-latamzy y sudamericafy arman el iframe con un script ofuscado, así que el dominio del reproductor está escrito en el plugin. Si cambia, el método directo falla y queda el navegador.
+latamzy y sudamericafy arman el iframe con un script ofuscado, así que el dominio del reproductor está escrito en el plugin. Si cambia, `direct` falla y queda `browser`.
 
 **Un dominio no declarado** que pide `kino.fetch` (un reproductor que cambió, como el iframe de spf24live, que pasó de `missflight.net` a `tossequip.net`) no rompe nada: Kino le pregunta a la persona si lo permite. El kit de Node no simula esa pregunta y responde `host_not_allowed`.
 
-**Un servidor nuevo** (un dominio de embed que no está en `EXTRACTORES`) no se puede abrir: el plugin no sabe cómo sacar su m3u8, y `kino.browser.capture` solo arranca en los `hosts` del manifiesto. El plugin descarta esa señal sin intentarla, escribe `servidor no soportado: <dominio>` en el log y prueba la siguiente. Si todas las señales del evento son de servidores desconocidos, la persona ve «Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.» (con el «Modo debug» del plugin activado, Kino guarda ese registro y permite compartirlo). Para sumarlo hay que agregar sus métodos en `EXTRACTORES` y su host en `hosts` (un test exige que coincidan), subir la versión y aprobar la actualización en Kino (Ajustes ▸ Plugins), porque Kino no instala solo una versión que amplía `hosts`.
+**Un servidor nuevo** (un dominio de embed que no está en `EXTRACTORS`) no se puede abrir: el plugin no sabe cómo sacar su m3u8, y `kino.browser.capture` solo arranca en los `hosts` del manifiesto. El plugin descarta esa señal sin intentarla, escribe `unsupported server: <dominio>` en el log y prueba la siguiente. Si todas las señales del evento son de servidores desconocidos, la persona ve «Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.» (con el «Modo debug» del plugin activado, Kino guarda ese registro y permite compartirlo). Para sumarlo hay que agregar sus métodos en `EXTRACTORS` y su host en `hosts` (un test exige que coincidan), subir la versión y aprobar la actualización en Kino (Ajustes ▸ Plugins), porque Kino no instala solo una versión que amplía `hosts`.
 
 `kino.browser.capture` solo funciona dentro de la app; el kit de Node lo simula en los tests.
+
+### Idioma del código y textos
+
+El código (variables, funciones, archivos y comentarios), el log (`kino.log`), los mensajes de error técnicos de `kino.error` y la salida de la CLI están en inglés. Lo que ve la persona en Kino sale del catálogo `MESSAGES` de `plugin.js`, con su versión en castellano (`es`) y en inglés (`en`): `t("clave", { parámetros })` elige según `kino.lang` y reemplaza los `{nombre}` del texto. Para cambiar un texto o sumar un idioma se toca solo ese catálogo.
+
+Quedan en castellano, a propósito: las claves de ajustes (`tz`, `orden`, `duracion`, `forzar`, `mapa`, `etiquetas`, `actualizar`), porque cambiarlas borraría lo que cada persona configuró; los ids y refs que Kino ya guardó (`todos`, `evt:`, `ev:`); los meses de la cabecera de la agenda, que son los del sitio; y las etiquetas y ayudas de `kino-plugin.json`, que Kino lee del manifiesto.
 
 ## Licencia
 

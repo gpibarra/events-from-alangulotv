@@ -1,458 +1,470 @@
-// AlAnguloTV: la agenda de alangulotv como canales en vivo.
-// Estructura: categoría = competición (el texto antes de los ":" del evento), canal = evento, y las
-// señales del evento (TNT Sports, Op2, Op3…) son copias con etiqueta del canal, en el menú "Servidor".
-// resolve abre el embed de una señal en el navegador oculto de Kino y devuelve la petición de video.
+// AlAnguloTV: the alangulotv schedule as live channels.
+// Structure: category = competition (the text before the event's ":"), channel = event, and the
+// event's signals (TNT Sports, Op2, Op3…) are tried in order until one returns video.
+// Code, names and log in English; what the person sees comes from the MESSAGES catalog (see t()).
 
-// Único lugar con el dominio de la agenda. Si cambia, se cambia aquí y en "hosts" de kino-plugin.json
-// (un JSON no puede leerlo; un test comprueba que ambos coincidan).
+// The only place with the schedule's domain. If it changes, change it here and in "hosts" of kino-plugin.json
+// (a JSON cannot read it; a test checks that both match).
 export const BASE = "https://alangulotv.sx";
-// Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
-// cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.10";
-const AGENDA = BASE + "/agenda.php";
+// Must match "version" in kino-plugin.json (a test checks it). It is written to the log on every
+// resolve to know for sure which version runs on the device: Kino does not print it.
+export const VERSION = "0.8.0";
+const SCHEDULE_URL = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
-// Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
-const MAX_ITEMS_FILA = 60;
-const ID_TODOS = "todos";
-// El ref de un canal es solo el id del evento: resolve vuelve a leer la agenda y usa las señales de ese
-// momento, así un evento que el sitio listó sin enlaces funciona en cuanto los publica.
-const PREFIJO_EVENTO = "evt:";
-// Formato anterior (0.5.x y antes): llevaba las señales copiadas en JSON. Kino puede conservar filas
-// guardadas con ese ref hasta 6 h, así que se sigue entendiendo.
-const PREFIJO_LEGADO = "ev:";
+// Home is a single "Todos" row (Kino allows 20 rows of 60 items) and Live has the "Todos" category.
+const MAX_ROW_ITEMS = 60;
+// Ids and keys that Kino or the person already stored: not translated.
+const ALL_ID = "todos";
+const GENRE = "deportes";
+// A channel's ref is just the event id: resolve rereads the schedule and uses the signals of that
+// moment, so an event the site listed without links works as soon as it publishes them.
+const EVENT_PREFIX = "evt:";
+// Previous format (0.5.x and earlier): carried the signals copied as JSON ({ n: label, e: embed }). Kino may
+// keep stored rows with that ref for up to 6 h, so it is still understood.
+const LEGACY_PREFIX = "ev:";
 
-// Las horas de la agenda vienen en UTC+1: el /hora.js del sitio las pasa a la zona del visitante con
-// hora_local = hora + (UTC_del_visitante - 1). El ajuste "tz" (kino-plugin.json) es esa zona.
-const UTC_AGENDA = 1;
-const TZ_POR_DEFECTO = -3; // Argentina
-// Un evento "ya terminó" cuando pasaron DURACION horas desde su inicio (ajuste "duracion"); los terminados van al final.
-const DURACION_POR_DEFECTO = 3;
+// Schedule times are in UTC+1: the site's /hora.js converts them to the visitor's zone with
+// local_time = time + (visitor_UTC - 1). The "tz" setting (kino-plugin.json) is that zone.
+const SCHEDULE_UTC = 1;
+const DEFAULT_TZ = -3; // Argentina
+// An event "has ended" once DURATION hours have passed since its start ("duracion" setting); ended ones go last.
+const DEFAULT_DURATION = 3;
 
-// Cada dominio de embed tiene una lista de métodos que se prueban en orden: el primero que devuelve un Stream gana y,
-// si uno falla, se pasa al siguiente. Si el método de un servidor cambia, se escribe otra función con la firma
-// (embed) => Stream y se agrega a su lista. Las señales de un evento se prueban en el orden en que las trae la agenda.
-// Un dominio sin entrada es un servidor que el plugin no conoce: ni kino.fetch ni el navegador oculto pueden abrirlo
-// (no está en los hosts del manifiesto), así que se descarta sin intentarlo. Cada dominio de aquí debe estar en
-// "hosts" de kino-plugin.json (un test lo comprueba).
-const EXTRACTORES = {
-  // spf24live.st: su iframe (missflight.net) rechaza el User-Agent del WebView de Android ("; wv") con "domain protected",
-  // así que el navegador oculto nunca sirve. Se lee con kino.fetch y se descifra la configuración del reproductor.
-  "spf24live.st": [metodo("descifrado", extraerSpf24)],
-  // latamzy.com y sudamericafy.com arman con un script ofuscado un iframe a un reproductor que trae el m3u8 en texto
-  // plano (`playbackURL`). Se va directo a ese reproductor; si su dominio cambió, queda el navegador oculto.
+// --- Texts for the person -------------------------------------------------------------------------
+// Everything Kino shows the person comes from here, with its translation. To change a text or add a
+// language, only this catalog is touched. `{name}` is replaced with the parameter of the same name.
+const MESSAGES = {
+  allEvents: { es: "Todos los eventos", en: "All events" },
+  allCategory: { es: "Todos", en: "All" },
+  otherCompetition: { es: "Otros", en: "Other" },
+  done: { es: "Listo", en: "Done" },
+  noEventsToday: {
+    es: "No hay eventos en la agenda de hoy. El sitio aún no los publicó.",
+    en: "There are no events in today's schedule. The site has not published them yet.",
+  },
+  scheduleRead: {
+    es: "Agenda leída: {events} eventos ({withSignal} con señal) en {competitions} competiciones. Kino volverá a pedirla.",
+    en: "Schedule read: {events} events ({withSignal} with a signal) in {competitions} competitions. Kino will ask for it again.",
+  },
+  pressAgain: { es: "Pulsa otra vez para ver más.", en: "Press again for more." },
+  noTagsYet: {
+    es: "No hay eventos en la agenda de hoy: todavía no hay etiquetas que mostrar.",
+    en: "There are no events in today's schedule: no tags to show yet.",
+  },
+  siteTagsUnreadable: { es: "No pude leer las etiquetas del sitio.", en: "Could not read the site's tags." },
+  eventGone: { es: "Este evento ya no está en la agenda.", en: "This event is no longer in the schedule." },
+  noSignalYet: {
+    es: "Todavía no hay señal para este evento. Prueba más tarde.",
+    en: "There is no signal for this event yet. Try again later.",
+  },
+  unknownServer: {
+    es: "Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.",
+    en: "This event uses a server the plugin does not know yet. Tell the author and share the debug mode log.",
+  },
+  noSignalWorked: {
+    es: "No se pudo abrir ninguna señal de este evento ahora. Prueba de nuevo más tarde.",
+    en: "None of this event's signals could be opened right now. Try again later.",
+  },
+  signalUnavailable: {
+    es: "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
+    en: "This signal could not be opened right now. Try another option of the event.",
+  },
+};
+
+export function t(key, params = {}) {
+  const entry = MESSAGES[key];
+  const text = String(kino.lang).startsWith("en") ? entry.en : entry.es;
+  return text.replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? ""));
+}
+
+// --- Servers ---------------------------------------------------------------------------------------
+// Each embed domain has a list of methods tried in order: the first one that returns a Stream wins and,
+// if one fails, the next is tried. If a server's method changes, write another function with the signature
+// (embed) => Stream and add it to its list. An event's signals are tried in the order the schedule lists them.
+// A domain without an entry is a server the plugin does not know: there is no way to get its video, so it is skipped
+// without trying. Every domain here must be in "hosts" of kino-plugin.json (a test checks it).
+const EXTRACTORS = {
+  // spf24live.st: its iframe (missflight.net, now tossequip.net) rejects the Android WebView User-Agent ("; wv")
+  // with "domain protected", so the hidden browser never works. It is read with kino.fetch and the player's
+  // config is decrypted.
+  "spf24live.st": [method("decrypt", extractSpf24)],
+  // latamzy.com and sudamericafy.com build, with an obfuscated script, an iframe to a player that has the m3u8 in
+  // plain text (`playbackURL`). We go straight to that player; if its domain changed, the hidden browser remains.
   "latamzy.com": [
-    metodo("directo", extraerPlayback((stream) => "https://streamtp99a.sbs/global1.php?stream=" + stream)),
-    metodo("navegador", extraerPorRed({ referer: BASE + "/" })),
+    method("direct", extractPlayback((stream) => "https://streamtp99a.sbs/global1.php?stream=" + stream)),
+    method("browser", extractByNetwork({ referer: BASE + "/" })),
   ],
   "sudamericafy.com": [
-    metodo("directo", extraerPlayback((stream) => "https://la18hd.su/vivo/canales.php?stream=" + stream, {
-      Referer: "https://sudamericafy.com/", // la18hd.su solo responde a una carga que parece un iframe
+    method("direct", extractPlayback((stream) => "https://la18hd.su/vivo/canales.php?stream=" + stream, {
+      Referer: "https://sudamericafy.com/", // la18hd.su only answers a load that looks like an iframe
       "Sec-Fetch-Dest": "iframe",
       "Sec-Fetch-Mode": "navigate",
       "Sec-Fetch-Site": "cross-site",
     })),
-    metodo("navegador", extraerPorRed({ referer: BASE + "/" })),
+    method("browser", extractByNetwork({ referer: BASE + "/" })),
   ],
 };
-export const SERVIDORES = Object.keys(EXTRACTORES);
+export const SERVERS = Object.keys(EXTRACTORS);
 
-const MENSAJE_SERVIDOR_NUEVO = () =>
-  texto(
-    "Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.",
-    "This event uses a server the plugin does not know yet. Tell the author and share the debug mode log.",
-  );
-
-function metodo(nombre, extraer) {
-  return { nombre, extraer };
+function method(name, extract) {
+  return { name, extract };
 }
 
-const texto = (es, en) => (String(kino.lang).startsWith("en") ? en : es);
+// --- Schedule: competitions and events ------------------------------------------------------------
 
-// --- Agenda: competiciones y eventos --------------------------------------------------------------
-
-async function pedirAgenda() {
-  const r = await kino.fetch(AGENDA, { headers: { Referer: BASE + "/" } });
-  if (!r.ok) throw kino.error("unavailable", "la agenda respondió " + r.status);
+async function fetchSchedule() {
+  const r = await kino.fetch(SCHEDULE_URL, { headers: { Referer: BASE + "/" } });
+  if (!r.ok) throw kino.error("unavailable", "schedule responded " + r.status);
   return r.text();
 }
 
-// El sitio lista los eventos del día antes de tener sus enlaces: se devuelven todos, también los de 0 señales.
-async function cargarAgenda() {
-  return parsearAgenda(await pedirAgenda());
+// The site lists the day's events before it has their links: all are returned, including those with 0 signals.
+async function loadSchedule() {
+  return parseSchedule(await fetchSchedule());
 }
 
-// "Copa Libertadores: Estudiantes LP vs Flamengo" -> { competicion, partido }. Sin ":", la
-// competición es el tipo (AR, COL…) que el sitio le puso al evento.
-export function separarEvento(evento, tipo) {
-  const i = evento.indexOf(": ");
+// "Copa Libertadores: Estudiantes LP vs Flamengo" -> { competition, match }. Without ":", the
+// competition is the tag (AR, COL…) the site gave the event.
+export function splitEvent(name, tag) {
+  const i = name.indexOf(": ");
   return i > 0
-    ? { competicion: evento.slice(0, i), partido: evento.slice(i + 2) }
-    : { competicion: tipo || "Otros", partido: evento };
+    ? { competition: name.slice(0, i), match: name.slice(i + 2) }
+    : { competition: tag || t("otherCompetition"), match: name };
 }
 
-// Etiquetas: los códigos que el sitio le pone a cada evento (AR, LIB, MEX…; el `tipo` de la agenda).
-// El ajuste "orden" las ordena a gusto de la persona: "AR,LIB,SUD" pone esas primero, en ese orden, y el resto
-// va detrás en el orden de la agenda (a medida que aparecen). Vacío = el orden de la agenda.
-export function ordenEtiquetas() {
-  const crudo = kino.config.get("orden");
-  return typeof crudo === "string" ? crudo.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) : [];
+// Tags: the codes the site gives each event (AR, LIB, MEX…; the class of the schedule's <li>).
+// The "orden" setting sorts them to the person's liking: "AR,LIB,SUD" puts those first, in that order, and the rest
+// go after in schedule order (as they appear). Empty = schedule order.
+export function tagOrder() {
+  const raw = kino.config.get("orden");
+  return typeof raw === "string" ? raw.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean) : [];
 }
 
-const rangoEtiqueta = (tipo, orden) => {
-  const i = orden.indexOf(String(tipo || "").toUpperCase());
-  return i < 0 ? orden.length : i;
+const tagRank = (tag, order) => {
+  const i = order.indexOf(String(tag || "").toUpperCase());
+  return i < 0 ? order.length : i;
 };
 
-// Horas que dura un partido (ajuste "duracion", texto). Un valor inválido o fuera de 0,5 a 12 vuelve al de siempre.
-export function duracionHoras() {
+// Hours a match lasts ("duracion" setting, text). An invalid value or one outside 0.5 to 12 falls back to the default.
+export function durationHours() {
   const n = Number(String(kino.config.get("duracion") ?? "").replace(",", "."));
-  return Number.isFinite(n) && n >= 0.5 && n <= 12 ? n : DURACION_POR_DEFECTO;
+  return Number.isFinite(n) && n >= 0.5 && n <= 12 ? n : DEFAULT_DURATION;
 }
 
-// Con qué se ordena: las etiquetas del ajuste, la hora de ahora y cuánto dura un partido. Sin contexto (ahora =
-// -Infinity) nada "ha terminado" y solo manda la etiqueta.
-const SIN_ORDEN = { orden: [], ahora: -Infinity, duracionMs: 0 };
-export const contextoOrden = () => ({ orden: ordenEtiquetas(), ahora: Date.now(), duracionMs: duracionHoras() * 3600000 });
+// What sorting uses: the setting's tags, the current time and how long a match lasts. Without context (now =
+// -Infinity) nothing "has ended" and only the tag counts.
+const NO_SORT = { order: [], now: -Infinity, durationMs: 0 };
+export const sortContext = () => ({ order: tagOrder(), now: Date.now(), durationMs: durationHours() * 3600000 });
 
-const haTerminado = (e, ctx) => e.inicioMs != null && e.inicioMs + ctx.duracionMs <= ctx.ahora;
+const hasEnded = (e, ctx) => e.startMs != null && e.startMs + ctx.durationMs <= ctx.now;
 
-// Orden general: 1) los que ya terminaron al final, 2) etiquetas del ajuste "orden" (el resto, tras ellas, en el orden
-// de la agenda), 3) hora de inicio, 4) con señal antes que sin señal, 5) orden de la agenda. Así, si Kino recorta una
-// lista larga, lo que se pierde es lo que ya pasó.
-export function ordenarEventos(eventos, ctx = SIN_ORDEN) {
-  return eventos
-    .map((e, i) => ({ e, i, fin: haTerminado(e, ctx) ? 1 : 0, rango: rangoEtiqueta(e.tipo, ctx.orden) }))
+// Overall order: 1) ended ones last, 2) tags of the "orden" setting (the rest, after them, in schedule
+// order), 3) start time, 4) with signal before without, 5) schedule order. So, if Kino trims a long
+// list, what gets lost is what already happened.
+export function sortEvents(events, ctx = NO_SORT) {
+  return events
+    .map((e, i) => ({ e, i, ended: hasEnded(e, ctx) ? 1 : 0, rank: tagRank(e.tag, ctx.order) }))
     .sort((a, b) =>
-      a.fin - b.fin ||
-      a.rango - b.rango ||
-      (a.e.inicioMs ?? 0) - (b.e.inicioMs ?? 0) ||
-      (b.e.opciones.length > 0) - (a.e.opciones.length > 0) ||
+      a.ended - b.ended ||
+      a.rank - b.rank ||
+      (a.e.startMs ?? 0) - (b.e.startMs ?? 0) ||
+      (b.e.options.length > 0) - (a.e.options.length > 0) ||
       a.i - b.i)
     .map((x) => x.e);
 }
 
-// Competiciones con sus eventos. Se ordenan los eventos (ver ordenarEventos) y cada competición toma el lugar de
-// su primer evento: así una competición sube o baja según su evento más prioritario.
-export function agruparPorCompeticion(eventos, ctx = SIN_ORDEN) {
-  const grupos = new Map();
-  for (const e of ordenarEventos(eventos, ctx)) {
-    const { competicion, partido } = separarEvento(e.evento, e.tipo);
-    if (!grupos.has(competicion)) grupos.set(competicion, { id: "co-" + hash(competicion), titulo: competicion, eventos: [] });
-    grupos.get(competicion).eventos.push({ ...e, partido });
+// Competitions with their events. The events are sorted (see sortEvents) and each competition takes the place of
+// its first event: so a competition moves up or down with its highest-priority event.
+export function groupByCompetition(events, ctx = NO_SORT) {
+  const groups = new Map();
+  for (const e of sortEvents(events, ctx)) {
+    const { competition, match } = splitEvent(e.name, e.tag);
+    if (!groups.has(competition)) groups.set(competition, { id: "co-" + hash(competition), title: competition, events: [] });
+    groups.get(competition).events.push({ ...e, match });
   }
-  return [...grupos.values()];
+  return [...groups.values()];
 }
 
-export function zonaHoraria() {
+export function timeZone() {
   const n = Number(kino.config.get("tz"));
-  return Number.isFinite(n) && n >= -12 && n <= 14 ? n : TZ_POR_DEFECTO;
+  return Number.isFinite(n) && n >= -12 && n <= 14 ? n : DEFAULT_TZ;
 }
 
-// "00:00" (UTC+1) -> "20:00" en UTC-3. Solo la hora del día: si cruza la medianoche, no se marca el día.
-export function convertirHora(hhmm, tz) {
+// "00:00" (UTC+1) -> "20:00" in UTC-3. Time of day only: if it crosses midnight, the day is not marked.
+export function convertTime(hhmm, tz) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || "");
   if (!m) return hhmm || null;
-  const minutos = (((Number(m[1]) * 60 + Number(m[2]) + (tz - UTC_AGENDA) * 60) % 1440) + 1440) % 1440;
-  const dos = (n) => String(n).padStart(2, "0");
-  return dos(Math.floor(minutos / 60)) + ":" + dos(minutos % 60);
+  const minutes = (((Number(m[1]) * 60 + Number(m[2]) + (tz - SCHEDULE_UTC) * 60) % 1440) + 1440) % 1440;
+  const two = (n) => String(n).padStart(2, "0");
+  return two(Math.floor(minutes / 60)) + ":" + two(minutes % 60);
 }
 
-const idEvento = (e) => "ev-" + hash(e.evento);
+const eventId = (e) => "ev-" + hash(e.name);
 
-// En una lista mezclada ("Todos") el título lleva la competición; dentro de una competición, no.
-const tituloEvento = (e, tz, conCompeticion = false) => {
-  const hora = convertirHora(e.hora, tz);
-  const nombre = conCompeticion ? e.evento : (e.partido ?? separarEvento(e.evento, e.tipo).partido);
-  return (hora ? hora + " · " : "") + nombre;
+// In a mixed list ("Todos") the title carries the competition; inside a competition, it does not.
+const eventTitle = (e, tz, withCompetition = false) => {
+  const time = convertTime(e.time, tz);
+  const name = withCompetition ? e.name : (e.match ?? splitEvent(e.name, e.tag).match);
+  return (time ? time + " · " : "") + name;
 };
 
-const refEvento = (e) => PREFIJO_EVENTO + idEvento(e);
+const eventRef = (e) => EVENT_PREFIX + eventId(e);
 
-const itemEvento = (e, tz, conCompeticion = false) => ({
-  id: idEvento(e),
-  ref: refEvento(e),
-  title: tituloEvento(e, tz, conCompeticion),
+const eventItem = (e, tz, withCompetition = false) => ({
+  id: eventId(e),
+  ref: eventRef(e),
+  title: eventTitle(e, tz, withCompetition),
   kind: "live",
-  overview: e.evento,
-  badges: e.tipo ? [e.tipo] : undefined,
-  poster: e.icono || undefined,
+  overview: e.name,
+  badges: e.tag ? [e.tag] : undefined,
+  poster: e.icon || undefined,
 });
 
-// Inicio: una sola fila con todos los eventos (sin separar por competición).
+// Home: a single row with every event (not split by competition).
 export async function home() {
-  const tz = zonaHoraria();
-  const eventos = ordenarEventos(await cargarAgenda(), contextoOrden());
-  if (!eventos.length) return [];
+  const tz = timeZone();
+  const events = sortEvents(await loadSchedule(), sortContext());
+  if (!events.length) return [];
   return [{
-    id: ID_TODOS,
-    title: texto("Todos los eventos", "All events"),
-    items: eventos.slice(0, MAX_ITEMS_FILA).map((e) => itemEvento(e, tz, true)),
+    id: ALL_ID,
+    title: t("allEvents"),
+    items: events.slice(0, MAX_ROW_ITEMS).map((e) => eventItem(e, tz, true)),
   }];
 }
 
-// Pestaña "En vivo": la categoría "Todos" primero y después una categoría por competición.
+// Live tab: the "Todos" category first and then one category per competition.
 export async function liveCategories() {
-  const eventos = await cargarAgenda();
-  if (!eventos.length) return [];
-  const grupos = agruparPorCompeticion(eventos, contextoOrden()).slice(0, 199);
+  const events = await loadSchedule();
+  if (!events.length) return [];
+  const groups = groupByCompetition(events, sortContext()).slice(0, 199);
   return [
-    { id: ID_TODOS, title: texto("Todos", "All"), genre: "deportes" },
-    ...grupos.map((g) => ({ id: g.id, title: g.titulo, genre: "deportes" })),
+    { id: ALL_ID, title: t("allCategory"), genre: GENRE },
+    ...groups.map((g) => ({ id: g.id, title: g.title, genre: GENRE })),
   ];
 }
 
 export async function liveChannels({ categoryId }) {
-  const tz = zonaHoraria();
-  const eventos = await cargarAgenda();
-  const todos = categoryId === ID_TODOS;
-  const ctx = contextoOrden();
-  const lista = todos ? ordenarEventos(eventos, ctx) : agruparPorCompeticion(eventos, ctx).find((g) => g.id === categoryId)?.eventos;
-  if (!lista) return { items: [] };
+  const tz = timeZone();
+  const events = await loadSchedule();
+  const all = categoryId === ALL_ID;
+  const ctx = sortContext();
+  const list = all ? sortEvents(events, ctx) : groupByCompetition(events, ctx).find((g) => g.id === categoryId)?.events;
+  if (!list) return { items: [] };
   return {
-    items: lista.slice(0, 500).map((e, i) => ({
-      id: idEvento(e),
-      title: tituloEvento(e, tz, todos),
-      ref: refEvento(e),
+    items: list.slice(0, 500).map((e, i) => ({
+      id: eventId(e),
+      title: eventTitle(e, tz, all),
+      ref: eventRef(e),
       categoryId,
       number: i + 1,
-      logo: e.icono || undefined,
+      logo: e.icon || undefined,
     })),
   };
 }
 
-// --- Ajustes: botón "Actualizar eventos ahora" ---------------------------------------------------------
-// Kino guarda las filas de Inicio 6 h y las listas de En vivo 1 h, y el plugin no puede borrarlas. Lo que sí
-// hace Kino al vaciar un ajuste desde una acción es cerrar el sandbox y olvidar las filas de Inicio guardadas
-// (igual que al guardar cualquier cambio). Por eso el botón vacía el ajuste "forzar", que no sirve para nada
-// más: NUNCA debe incluir "tz" (volvería a UTC-3). Si la agenda no se puede leer, la acción lanza error y
-// Kino no vacía nada.
-export const AJUSTES_A_VACIAR = ["forzar"];
+// --- Settings: "Actualizar eventos ahora" button -------------------------------------------------------
+// Kino keeps Home rows for 6 h and Live lists for 1 h, and the plugin cannot clear them. What Kino does do
+// when an action clears a setting is close the sandbox and forget the stored Home rows (same as saving any
+// change). That is why the button clears the "forzar" setting, which serves no other purpose: it must
+// NEVER include "tz" (it would go back to UTC-3). If the schedule cannot be read, the action throws and
+// Kino clears nothing.
+export const SETTINGS_TO_CLEAR = ["forzar"];
 
 export async function action(key) {
-  if (key === "mapa") return accionMapa();
-  if (key === "etiquetas") return accionEtiquetas();
-  if (key !== "actualizar") return { message: texto("Listo", "Done") };
-  const eventos = await cargarAgenda();
-  const conSenal = eventos.filter((e) => e.opciones.length).length;
-  const competiciones = agruparPorCompeticion(eventos).length;
-  kino.log("actualización forzada v" + VERSION, eventos.length + " eventos", conSenal + " con señal");
-  // Sin eventos no hay nada que refrescar: no se vacía nada y se avisa.
-  if (!eventos.length) {
-    return {
-      message: texto(
-        "No hay eventos en la agenda de hoy. El sitio aún no los publicó.",
-        "There are no events in today's schedule. The site has not published them yet.",
-      ),
-    };
-  }
+  if (key === "mapa") return tagMapAction();
+  if (key === "etiquetas") return siteTagsAction();
+  if (key !== "actualizar") return { message: t("done") };
+  const events = await loadSchedule();
+  const withSignal = events.filter((e) => e.options.length).length;
+  const competitions = groupByCompetition(events).length;
+  kino.log("forced refresh v" + VERSION, events.length + " events", withSignal + " with signal");
+  // Without events there is nothing to refresh: nothing is cleared and the person is told.
+  if (!events.length) return { message: t("noEventsToday") };
   return {
-    message: texto(
-      `Agenda leída: ${eventos.length} eventos (${conSenal} con señal) en ${competiciones} competiciones. Kino volverá a pedirla.`,
-      `Schedule read: ${eventos.length} events (${conSenal} with a signal) in ${competiciones} competitions. Kino will ask for it again.`,
-    ),
-    clearSettings: AJUSTES_A_VACIAR,
+    message: t("scheduleRead", { events: events.length, withSignal, competitions }),
+    clearSettings: SETTINGS_TO_CLEAR,
   };
 }
 
-// --- Ajustes: botón "Ver mapa de competiciones" ---------------------------------------------------------
-// En En vivo solo se ve el nombre de la competición, pero el ajuste "orden" pide la etiqueta (AR, LIB…). El botón
-// lista qué etiqueta tiene cada competición de la agenda de ahora. El mensaje de una acción admite 300 caracteres,
-// así que si no cabe se reparte en páginas: cada pulsación muestra la siguiente (la página se guarda en kino.storage).
-const MAX_PAGINA_MAPA = 230;
+// --- Settings: "Ver mapa de competiciones" button ------------------------------------------------------
+// Live only shows the competition name, but the "orden" setting asks for the tag (AR, LIB…). The button
+// lists which tag each competition of the current schedule has. An action message allows 300 characters,
+// so if it does not fit it is split into pages: each press shows the next one (the page is kept in kino.storage).
+const MAX_PAGE_CHARS = 230;
 
-export function mapaDeEtiquetas(eventos) {
-  const porEtiqueta = new Map();
-  for (const e of eventos) {
-    const tipo = String(e.tipo || "?").toUpperCase();
-    const { competicion } = separarEvento(e.evento, e.tipo);
-    if (!porEtiqueta.has(tipo)) porEtiqueta.set(tipo, []);
-    if (!porEtiqueta.get(tipo).includes(competicion)) porEtiqueta.get(tipo).push(competicion);
+export function tagMap(events) {
+  const byTag = new Map();
+  for (const e of events) {
+    const tag = String(e.tag || "?").toUpperCase();
+    const { competition } = splitEvent(e.name, e.tag);
+    if (!byTag.has(tag)) byTag.set(tag, []);
+    if (!byTag.get(tag).includes(competition)) byTag.get(tag).push(competition);
   }
-  return [...porEtiqueta].map(([tipo, competiciones]) => `${tipo}: ${competiciones.join(", ")}`);
+  return [...byTag].map(([tag, competitions]) => `${tag}: ${competitions.join(", ")}`);
 }
 
-export function paginasDelMapa(entradas, max = MAX_PAGINA_MAPA) {
-  const paginas = [];
-  let actual = "";
-  for (const entrada of entradas) {
-    const corta = entrada.length > max ? entrada.slice(0, max - 1) + "…" : entrada;
-    if (actual && (actual + "\n" + corta).length > max) {
-      paginas.push(actual);
-      actual = corta;
+export function paginate(entries, max = MAX_PAGE_CHARS) {
+  const pages = [];
+  let current = "";
+  for (const entry of entries) {
+    const short = entry.length > max ? entry.slice(0, max - 1) + "…" : entry;
+    if (current && (current + "\n" + short).length > max) {
+      pages.push(current);
+      current = short;
     } else {
-      actual = actual ? actual + "\n" + corta : corta;
+      current = current ? current + "\n" + short : short;
     }
   }
-  if (actual) paginas.push(actual);
-  return paginas;
+  if (current) pages.push(current);
+  return pages;
 }
 
-// Muestra una lista larga de a un trozo por pulsación (la página se guarda en kino.storage bajo `clave`).
-function mensajePaginado(entradas, clave) {
-  const paginas = paginasDelMapa(entradas);
-  let n = Number(kino.storage.get(clave));
-  if (!Number.isInteger(n) || n < 0 || n >= paginas.length) n = 0;
-  kino.storage.set(clave, String((n + 1) % paginas.length));
-  const pie = paginas.length > 1 ? `\n(${n + 1}/${paginas.length}) ${texto("Pulsa otra vez para ver más.", "Press again for more.")}` : "";
-  return { message: paginas[n] + pie, paginas: paginas.length };
+// Shows a long list one chunk per press (the page is kept in kino.storage under `storageKey`).
+function pagedMessage(entries, storageKey) {
+  const pages = paginate(entries);
+  let n = Number(kino.storage.get(storageKey));
+  if (!Number.isInteger(n) || n < 0 || n >= pages.length) n = 0;
+  kino.storage.set(storageKey, String((n + 1) % pages.length));
+  const footer = pages.length > 1 ? `\n(${n + 1}/${pages.length}) ${t("pressAgain")}` : "";
+  return { message: pages[n] + footer, pages: pages.length };
 }
 
-async function accionMapa() {
-  const eventos = await cargarAgenda();
-  const entradas = mapaDeEtiquetas(eventos);
-  if (!entradas.length) {
-    return { message: texto("No hay eventos en la agenda de hoy: todavía no hay etiquetas que mostrar.", "There are no events in today's schedule: no tags to show yet.") };
-  }
-  const { message, paginas } = mensajePaginado(entradas, "mapaPagina");
-  kino.log("mapa de etiquetas v" + VERSION, entradas.length + " etiquetas", paginas + " páginas");
+async function tagMapAction() {
+  const entries = tagMap(await loadSchedule());
+  if (!entries.length) return { message: t("noTagsYet") };
+  const { message, pages } = pagedMessage(entries, "tagMapPage");
+  kino.log("tag map v" + VERSION, entries.length + " tags", pages + " pages");
   return { message };
 }
 
-// Botón "Ver todas las etiquetas": las que el sitio conoce en su CSS (aunque hoy no haya partidos de ellas) y el nombre
-// de su imagen, que suele decir de qué torneo o país es ("libertadore", "sudamericana", "championsleague"…).
-async function accionEtiquetas() {
-  const iconos = iconosDeAgenda(await pedirAgenda());
-  const entradas = etiquetasDelSitio(iconos);
-  if (!entradas.length) {
-    return { message: texto("No pude leer las etiquetas del sitio.", "Could not read the site's tags.") };
-  }
-  const { message, paginas } = mensajePaginado(entradas, "etiquetasPagina");
-  kino.log("etiquetas del sitio v" + VERSION, entradas.length + " etiquetas", paginas + " páginas");
+// "Ver todas las etiquetas" button: the tags the site knows in its CSS (even with no matches today) and the name
+// of their image, which usually tells the tournament or country ("libertadore", "sudamericana", "championsleague"…).
+async function siteTagsAction() {
+  const entries = siteTags(scheduleIcons(await fetchSchedule()));
+  if (!entries.length) return { message: t("siteTagsUnreadable") };
+  const { message, pages } = pagedMessage(entries, "siteTagsPage");
+  kino.log("site tags v" + VERSION, entries.length + " tags", pages + " pages");
   return { message };
 }
 
 // --- resolve ---------------------------------------------------------------------------------------
 
 export async function resolve(ref) {
-  await Promise.resolve(); // Kino 0.9.49 y anteriores no atajan un throw antes del primer await
-  if (ref.startsWith(PREFIJO_EVENTO)) return resolverEventoPorId(ref.slice(PREFIJO_EVENTO.length));
-  if (ref.startsWith(PREFIJO_LEGADO)) return resolverEventoLegado(ref);
-  return resolverSenal(ref);
+  await Promise.resolve(); // Kino 0.9.49 and earlier do not catch a throw before the first await
+  if (ref.startsWith(EVENT_PREFIX)) return resolveEventById(ref.slice(EVENT_PREFIX.length));
+  if (ref.startsWith(LEGACY_PREFIX)) return resolveLegacyEvent(ref);
+  return resolveSignal(ref);
 }
 
-// Un evento por su id: relee la agenda y resuelve las señales que tiene ahora.
-async function resolverEventoPorId(id) {
-  const evento = (await cargarAgenda()).find((e) => idEvento(e) === id);
-  if (!evento) {
-    throw kino.error("not_found", "el evento ya no está en la agenda", {
-      userMessage: texto("Este evento ya no está en la agenda.", "This event is no longer in the schedule."),
-    });
+// An event by its id: rereads the schedule and resolves the signals it has now.
+async function resolveEventById(id) {
+  const event = (await loadSchedule()).find((e) => eventId(e) === id);
+  if (!event) throw kino.error("not_found", "event is no longer in the schedule", { userMessage: t("eventGone") });
+  if (!event.options.length) {
+    kino.log("event without signals", event.tag);
+    throw kino.error("not_found", "event has no signals yet", { userMessage: t("noSignalYet") });
   }
-  if (!evento.opciones.length) {
-    kino.log("evento sin señales", evento.tipo);
-    throw kino.error("not_found", "el evento no tiene señales todavía", {
-      userMessage: texto(
-        "Todavía no hay señal para este evento. Prueba más tarde.",
-        "There is no signal for this event yet. Try again later.",
-      ),
-    });
-  }
-  return resolverSenales(evento.opciones.map((o) => ({ n: o.texto, e: o.embed })));
+  return resolveSignals(event.options);
 }
 
-// Ref de versiones anteriores: las señales vienen copiadas en el propio ref.
-async function resolverEventoLegado(ref) {
-  let senales;
+// Ref from earlier versions: the signals come copied in the ref itself as { n: label, e: embed }.
+async function resolveLegacyEvent(ref) {
+  let signals;
   try {
-    senales = JSON.parse(ref.slice(PREFIJO_LEGADO.length)).map((s) => ({ n: String(s.n), e: String(s.e) }));
-    if (!senales.length) throw new Error("sin señales");
+    signals = JSON.parse(ref.slice(LEGACY_PREFIX.length)).map((s) => ({ label: String(s.n), embed: String(s.e) }));
+    if (!signals.length) throw new Error("no signals");
   } catch {
-    throw kino.error("not_found", "ref de evento inválido");
+    throw kino.error("not_found", "invalid event ref");
   }
-  return resolverSenales(senales);
+  return resolveSignals(signals);
 }
 
-// Prueba las señales en el orden de la agenda y devuelve la primera que anda. Las demás van como copias con etiqueta
-// (menú "Servidor"): Kino las resuelve solo si la persona las elige o si esta falla.
-async function resolverSenales(lista) {
-  const senales = lista.map((s) => ({ n: s.n.slice(0, 48), e: s.e }));
-  let desconocidas = 0;
-  for (const [i, senal] of senales.entries()) {
+// Tries the signals in schedule order and returns the first one that works. The rest go as labeled copies,
+// although Kino ignores them on live channels.
+async function resolveSignals(list) {
+  const signals = list.map((s) => ({ label: s.label.slice(0, 48), embed: s.embed }));
+  let unknown = 0;
+  for (const [i, signal] of signals.entries()) {
     try {
-      const stream = await resolverSenal(senal.e);
+      const stream = await resolveSignal(signal.embed);
       return {
         ...stream,
-        label: senal.n,
-        alternatives: senales.filter((_, j) => j !== i).map((s) => ({ label: s.n, ref: s.e })),
+        label: signal.label,
+        alternatives: signals.filter((_, j) => j !== i).map((s) => ({ label: s.label, ref: s.embed })),
       };
     } catch (e) {
-      if (e.servidorDesconocido) desconocidas++;
-      kino.log("señal descartada", new URL(senal.e).hostname, e.code);
+      if (e.unknownServer) unknown++;
+      kino.log("signal skipped", new URL(signal.embed).hostname, e.code);
     }
   }
-  if (desconocidas === senales.length) {
-    throw kino.error("not_found", "todas las señales son de servidores no soportados", { userMessage: MENSAJE_SERVIDOR_NUEVO() });
+  if (unknown === signals.length) {
+    throw kino.error("not_found", "every signal is on an unsupported server", { userMessage: t("unknownServer") });
   }
-  throw kino.error("unavailable", "ninguna señal respondió", {
-    userMessage: texto(
-      "No se pudo abrir ninguna señal de este evento ahora. Prueba de nuevo más tarde.",
-      "None of this event's signals could be opened right now. Try again later.",
-    ),
-  });
+  throw kino.error("unavailable", "no signal responded", { userMessage: t("noSignalWorked") });
 }
 
-// Una señal (el embed de un servidor): se resuelve con el extractor de su dominio.
-async function resolverSenal(ref) {
+// A signal (a server's embed): resolved with its domain's methods.
+async function resolveSignal(ref) {
   let embed;
   try {
     embed = new URL(ref);
   } catch {
-    throw kino.error("not_found", "ref inválido");
+    throw kino.error("not_found", "invalid ref");
   }
   kino.log("resolve v" + VERSION, embed.hostname);
-  const metodos = EXTRACTORES[embed.hostname];
-  if (!metodos) {
-    // Se registra para que llegue al autor por el registro del modo debug.
-    kino.log("servidor no soportado: " + embed.hostname, embed.href);
-    const error = kino.error("not_found", "servidor no soportado: " + embed.hostname, { userMessage: MENSAJE_SERVIDOR_NUEVO() });
-    error.servidorDesconocido = true;
+  const methods = EXTRACTORS[embed.hostname];
+  if (!methods) {
+    // Logged so it reaches the author through the debug mode log.
+    kino.log("unsupported server: " + embed.hostname, embed.href);
+    const error = kino.error("not_found", "unsupported server: " + embed.hostname, { userMessage: t("unknownServer") });
+    error.unknownServer = true;
     throw error;
   }
-  let ultimo;
-  for (const { nombre, extraer } of metodos) {
+  let last;
+  for (const { name, extract } of methods) {
     try {
-      const stream = await extraer(embed.href);
-      kino.log("método ok", embed.hostname, nombre);
+      const stream = await extract(embed.href);
+      kino.log("method ok", embed.hostname, name);
       return stream;
     } catch (e) {
-      kino.log("método falló", embed.hostname, nombre, e.code, e.message);
-      ultimo = e;
-      if (e.fueraDelAire) break;
+      kino.log("method failed", embed.hostname, name, e.code, e.message);
+      last = e;
+      if (e.offAir) break;
     }
   }
-  throw ultimo;
+  throw last;
 }
 
-// Método "directo": el reproductor de algunos servidores trae el m3u8 en texto plano (`var playbackURL = "…"`).
-// `urlDe` arma la dirección del reproductor a partir del parámetro `stream` del embed.
-const UA_CHROME_MOVIL = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+// "direct" method: some servers' player has the m3u8 in plain text (`var playbackURL = "…"`).
+// `playerUrl` builds the player's address from the embed's `stream` parameter.
+const MOBILE_CHROME_UA = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
 
-function extraerPlayback(urlDe, headers = {}) {
+function extractPlayback(playerUrl, headers = {}) {
   return async (embed) => {
     const stream = new URL(embed).searchParams.get("stream");
-    if (!stream) throw kino.error("not_found", "el embed no trae stream");
-    const reproductor = urlDe(stream);
-    const r = await kino.fetch(reproductor, { headers: { "User-Agent": UA_CHROME_MOVIL, ...headers } });
-    if (!r.ok) throw kino.error("unavailable", new URL(reproductor).hostname + " respondió " + r.status);
+    if (!stream) throw kino.error("not_found", "embed has no stream parameter");
+    const player = playerUrl(stream);
+    const r = await kino.fetch(player, { headers: { "User-Agent": MOBILE_CHROME_UA, ...headers } });
+    if (!r.ok) throw kino.error("unavailable", new URL(player).hostname + " responded " + r.status);
     const url = /playbackURL\s*=\s*["']([^"']+)["']/.exec(await r.text())?.[1]?.replace(/\\\//g, "/");
-    if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", new URL(reproductor).hostname + " sin playbackURL");
-    const resultado = { url, mime: MIME_HLS, headers: { "User-Agent": UA_CHROME_MOVIL } };
-    await comprobarEnElAire(resultado);
-    return resultado;
+    if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", new URL(player).hostname + " has no playbackURL");
+    const result = { url, mime: MIME_HLS, headers: { "User-Agent": MOBILE_CHROME_UA } };
+    await checkOnAir(result);
+    return result;
   };
 }
 
-// Los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), y el
-// navegador oculto también la "captura" aunque no responda. Kino reintenta ese m3u8 sin pasar a otra señal, así que
-// se pide la lista antes de devolverla: si responde un error, no contesta a tiempo o no es una lista HLS, el canal está
-// fuera del aire y se pasa directo a la siguiente señal (sin probar otro método de ese servidor, que vería el mismo
-// canal). Los servidores de video no están en el manifiesto (cambian seguido): Kino le pregunta a la persona si
-// permite cada uno, y si no lo permite el m3u8 se devuelve sin comprobar.
-async function comprobarEnElAire({ url, headers }) {
+// Players hand out the URL even when the channel is off air (before a match, for example), and the hidden
+// browser also "captures" it even if it does not respond. Kino retries that m3u8 without moving to another signal, so
+// the playlist is requested before returning it: if it answers an error, does not answer in time or is not an HLS
+// playlist, the channel is off air and the next signal is tried right away (without trying another method of that
+// server, which would see the same channel). Video servers are not in the manifest (they change often): Kino asks the
+// person whether to allow each one, and if not allowed the m3u8 is returned unchecked.
+async function checkOnAir({ url, headers }) {
   const host = new URL(url).hostname;
-  const fueraDelAire = (motivo) => {
-    const error = kino.error("unavailable", "canal fuera del aire: " + host + " " + motivo);
-    error.fueraDelAire = true;
+  const offAir = (reason) => {
+    const error = kino.error("unavailable", "channel off air: " + host + " " + reason);
+    error.offAir = true;
     return error;
   };
   let r;
@@ -460,160 +472,156 @@ async function comprobarEnElAire({ url, headers }) {
     r = await kino.fetch(url, { headers, timeoutMs: 8000 });
   } catch (e) {
     if (e.code === "host_not_allowed") {
-      kino.log("m3u8 sin comprobar (host no permitido)", host);
+      kino.log("m3u8 not checked (host not allowed)", host);
       return;
     }
-    throw fueraDelAire("no respondió (" + (e.code || e.message) + ")");
+    throw offAir("did not respond (" + (e.code || e.message) + ")");
   }
-  const lista = r.ok ? await r.text() : "";
-  if (!lista.trimStart().startsWith("#EXTM3U")) throw fueraDelAire("respondió " + r.status);
+  const playlist = r.ok ? await r.text() : "";
+  if (!playlist.trimStart().startsWith("#EXTM3U")) throw offAir("responded " + r.status);
 }
 
-// Método "spf24live": la página solo trae un iframe a missflight.net, que sirve el reproductor si su Referer es
-// spf24live.st y el User-Agent es el de un Chrome (no un WebView). El iframe guarda el m3u8 en window._econfig:
-// base64 de cuatro trozos iguales, cada uno base64 con un carácter de relleno en la posición 3, que unidos en el
-// orden 1, 3, 0, 2 son el base64 de un JSON con `stream_url`. Los segmentos piden Referer missflight.net.
-const ORDEN_ECONFIG = [1, 3, 0, 2];
+// "decrypt" method (spf24live): the page only has an iframe to the player (missflight.net, now tossequip.net), which
+// serves it if the Referer is spf24live.st and the User-Agent is Chrome's (not a WebView). The iframe keeps the m3u8 in
+// window._econfig: base64 of four equal chunks, each base64 with a padding character at position 3, which joined
+// in the order 1, 3, 0, 2 are the base64 of a JSON with `stream_url`. The segments require the iframe's Referer.
+const ECONFIG_ORDER = [1, 3, 0, 2];
 
-export function descifrarEconfig(econfig) {
-  const todo = atob(econfig);
-  const n = todo.length / 4;
-  if (!Number.isInteger(n) || n < 5) throw new Error("econfig de largo inesperado");
-  const trozos = [0, 1, 2, 3].map((i) => {
-    const t = todo.slice(i * n, (i + 1) * n);
-    return atob(t.slice(0, 3) + t.slice(4));
+export function decryptEconfig(econfig) {
+  const all = atob(econfig);
+  const n = all.length / 4;
+  if (!Number.isInteger(n) || n < 5) throw new Error("econfig has an unexpected length");
+  const chunks = [0, 1, 2, 3].map((i) => {
+    const chunk = all.slice(i * n, (i + 1) * n);
+    return atob(chunk.slice(0, 3) + chunk.slice(4));
   });
-  return JSON.parse(atob(ORDEN_ECONFIG.map((i) => trozos[i]).join("")));
+  return JSON.parse(atob(ECONFIG_ORDER.map((i) => chunks[i]).join("")));
 }
 
-async function extraerSpf24(embed) {
-  const pedir = async (url, referer) => {
-    const r = await kino.fetch(url, { headers: { Referer: referer, "User-Agent": UA_CHROME_MOVIL } });
-    if (!r.ok) throw kino.error("unavailable", new URL(url).hostname + " respondió " + r.status);
+async function extractSpf24(embed) {
+  const get = async (url, referer) => {
+    const r = await kino.fetch(url, { headers: { Referer: referer, "User-Agent": MOBILE_CHROME_UA } });
+    if (!r.ok) throw kino.error("unavailable", new URL(url).hostname + " responded " + r.status);
     return r.text();
   };
-  const pagina = await pedir(embed, BASE + "/");
-  const iframe = /<iframe[^>]+src=["'](https:\/\/[^"']+)["']/i.exec(pagina)?.[1];
-  if (!iframe) throw kino.error("not_found", "spf24live sin iframe");
-  const reproductor = await pedir(iframe, "https://spf24live.st/");
-  const econfig = /_econfig\s*=\s*["']([A-Za-z0-9+/=]+)["']/.exec(reproductor)?.[1];
-  if (!econfig) throw kino.error("not_found", "el iframe no trae configuración (" + new URL(iframe).hostname + ")");
+  const page = await get(embed, BASE + "/");
+  const iframe = /<iframe[^>]+src=["'](https:\/\/[^"']+)["']/i.exec(page)?.[1];
+  if (!iframe) throw kino.error("not_found", "spf24live has no iframe");
+  const player = await get(iframe, "https://spf24live.st/");
+  const econfig = /_econfig\s*=\s*["']([A-Za-z0-9+/=]+)["']/.exec(player)?.[1];
+  if (!econfig) throw kino.error("not_found", "iframe has no config (" + new URL(iframe).hostname + ")");
   let config;
   try {
-    config = descifrarEconfig(econfig);
+    config = decryptEconfig(econfig);
   } catch (e) {
-    throw kino.error("not_found", "no se pudo descifrar la configuración: " + e.message);
+    throw kino.error("not_found", "could not decrypt config: " + e.message);
   }
   const url = config.stream_url || config.stream_url_nop2p;
-  if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", "la configuración no trae stream_url");
-  const stream = { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": UA_CHROME_MOVIL } };
-  await comprobarEnElAire(stream);
+  if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", "config has no stream_url");
+  const stream = { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": MOBILE_CHROME_UA } };
+  await checkOnAir(stream);
   kino.log("spf24live ok", new URL(iframe).hostname, new URL(url).hostname);
   return stream;
 }
 
-// Método "red": la página arma el reproductor con sus scripts, así que se abre oculta y se toma la
-// petición .m3u8. Los headers que devuelve (Referer, User-Agent…) hay que pasarlos al reproductor.
-// `referer` es opcional: solo para los embeds que lo exigen en la primera carga.
-function extraerPorRed({ referer } = {}) {
+// "browser" method: the page builds the player with its scripts, so it is opened hidden and the .m3u8
+// request is taken. The headers it returns (Referer, User-Agent…) must be passed to the player.
+// `referer` is optional: only for embeds that require it on the first load.
+function extractByNetwork({ referer } = {}) {
   return async (embed) => {
     const host = new URL(embed).hostname;
-    let captura;
+    let capture;
     try {
-      captura = await kino.browser.capture(embed, {
+      capture = await kino.browser.capture(embed, {
         ...(referer ? { headers: { Referer: referer } } : {}),
-        timeoutMs: 15000, // Kino da 20 s a una copia perezosa y 75 s a todo el resolve
+        timeoutMs: 15000, // Kino gives a lazy copy 20 s and the whole resolve 75 s
         match: "\\.m3u8",
       });
     } catch (e) {
-      kino.log("captura falló", host, e.code, e.message);
-      throw kino.error("unavailable", "captura " + (e.code || "falló"), {
-        userMessage: texto(
-          "No se pudo abrir esta señal ahora. Prueba otra opción del evento.",
-          "This signal could not be opened right now. Try another option of the event.",
-        ),
-      });
+      kino.log("capture failed", host, e.code, e.message);
+      throw kino.error("unavailable", "capture " + (e.code || "failed"), { userMessage: t("signalUnavailable") });
     }
-    kino.log("captura ok", host, captura.media.length + " medios");
-    const medio = captura.media.find((m) => /\.m3u8/i.test(m.url)) ?? captura.media[0];
-    if (!medio) throw kino.error("not_found", "la página no pidió video");
-    const resultado = { url: medio.url, mime: MIME_HLS, headers: medio.headers };
-    await comprobarEnElAire(resultado);
-    return resultado;
+    kino.log("capture ok", host, capture.media.length + " media");
+    const media = capture.media.find((m) => /\.m3u8/i.test(m.url)) ?? capture.media[0];
+    if (!media) throw kino.error("not_found", "page requested no video");
+    const result = { url: media.url, mime: MIME_HLS, headers: media.headers };
+    await checkOnAir(result);
+    return result;
   };
 }
 
 // agenda.php: <b>Agenda - Viernes 16 de Octubre de 2026</b>
-//   <li class="TIPO"><a href="#">Evento <span class="t">hora</span></a><ul>
-//   <li><a href="/eventos.html?r=BASE64">Opción <span>Calidad</span></a></li>…</ul></li>
-// Cada evento lleva `inicioMs` (UTC): la fecha de la cabecera + su hora en UTC+1. La agenda va en orden cronológico y
-// pasa de medianoche, así que cuando la hora baja respecto de la anterior es el día siguiente.
-const MESES = { enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5, julio: 6, agosto: 7, septiembre: 8, setiembre: 8, octubre: 9, noviembre: 10, diciembre: 11 };
+//   <li class="TAG"><a href="#">Event <span class="t">time</span></a><ul>
+//   <li><a href="/eventos.html?r=BASE64">Option <span>Quality</span></a></li>…</ul></li>
+// Each event carries `startMs` (UTC): the header date + its UTC+1 time. The schedule is chronological and
+// goes past midnight, so when the time drops compared to the previous one it is the next day.
+// The months are in Spanish because that is how the site writes them.
+const MONTHS = { enero: 0, febrero: 1, marzo: 2, abril: 3, mayo: 4, junio: 5, julio: 6, agosto: 7, septiembre: 8, setiembre: 8, octubre: 9, noviembre: 10, diciembre: 11 };
 
-function fechaDeAgenda(html) {
+function scheduleDate(html) {
   const m = /Agenda[^<]*?(\d{1,2})\s+de\s+([A-Za-zñÑ]+)\s+de\s+(\d{4})/.exec(html);
-  const mes = m ? MESES[m[2].toLowerCase()] : undefined;
-  return mes === undefined ? null : Date.UTC(Number(m[3]), mes, Number(m[1]));
+  const month = m ? MONTHS[m[2].toLowerCase()] : undefined;
+  return month === undefined ? null : Date.UTC(Number(m[3]), month, Number(m[1]));
 }
 
-// El CSS de la agenda le pone a cada etiqueta su imagen: `.AR > a:before { background-image: url(https://…/argentina.png) }`.
-// Se lee de ahí (no se copia la lista) para que una etiqueta nueva o una imagen cambiada se tomen solas.
-export function iconosDeAgenda(html) {
-  const iconos = {};
+// The schedule's CSS gives each tag its image: `.AR > a:before { background-image: url(https://…/argentina.png) }`.
+// It is read from there (the list is not copied) so a new tag or a changed image is picked up on its own.
+export function scheduleIcons(html) {
+  const icons = {};
   for (const m of html.matchAll(/\.([A-Za-z0-9_]+)\s*>\s*a:before\s*\{[^}]*?url\(\s*["']?([^"')]+?)["']?\s*\)/g)) {
     const url = m[2].trim().replace(/ /g, "%20");
-    if (/^https:\/\//.test(url)) iconos[m[1]] = url;
+    if (/^https:\/\//.test(url)) icons[m[1]] = url;
   }
-  return iconos;
+  return icons;
 }
 
-// "ARA: arabia", "LIB: libertadore"…: la etiqueta y el nombre de su imagen (sin carpeta ni extensión).
-export function etiquetasDelSitio(iconos) {
-  return Object.entries(iconos).map(([tipo, url]) => {
-    let nombre = url.split("/").pop().split("?")[0];
-    try { nombre = decodeURIComponent(nombre); } catch { /* se deja tal cual */ }
-    return `${tipo}: ${nombre.replace(/\.[A-Za-z0-9]+$/, "")}`;
+// "ARA: arabia", "LIB: libertadore"…: the tag and its image name (without folder or extension).
+export function siteTags(icons) {
+  return Object.entries(icons).map(([tag, url]) => {
+    let name = url.split("/").pop().split("?")[0];
+    try { name = decodeURIComponent(name); } catch { /* left as is */ }
+    return `${tag}: ${name.replace(/\.[A-Za-z0-9]+$/, "")}`;
   });
 }
 
-export function parsearAgenda(html) {
-  const eventos = [];
-  const reEvento = /<li class="([\w-]+)">\s*<a href="#">([\s\S]*?)<\/a>\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/g;
-  for (const m of html.matchAll(reEvento)) {
-    const cabecera = m[2];
-    const hora = (/<span class="t">([^<]*)<\/span>/.exec(cabecera) || [])[1];
-    const opciones = [];
+export function parseSchedule(html) {
+  const events = [];
+  const eventRe = /<li class="([\w-]+)">\s*<a href="#">([\s\S]*?)<\/a>\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>/g;
+  for (const m of html.matchAll(eventRe)) {
+    const header = m[2];
+    const time = (/<span class="t">([^<]*)<\/span>/.exec(header) || [])[1];
+    const options = [];
     for (const o of m[3].matchAll(/<a href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/g)) {
-      const embed = decodificarR(o[1]);
-      if (embed) opciones.push({ texto: limpiar(o[2]), embed });
+      const embed = decodeR(o[1]);
+      if (embed) options.push({ label: clean(o[2]), embed });
     }
-    eventos.push({
-      tipo: m[1],
-      hora: hora ? hora.trim() : null,
-      evento: limpiar(cabecera.replace(/<span class="t">[\s\S]*?<\/span>/, "")),
-      opciones,
-      inicioMs: null,
-      icono: null,
+    events.push({
+      tag: m[1],
+      time: time ? time.trim() : null,
+      name: clean(header.replace(/<span class="t">[\s\S]*?<\/span>/, "")),
+      options,
+      startMs: null,
+      icon: null,
     });
   }
-  const iconos = iconosDeAgenda(html);
-  for (const e of eventos) e.icono = iconos[e.tipo] ?? null;
-  const base = fechaDeAgenda(html);
-  let dia = 0;
-  let previo = -1;
-  for (const e of eventos) {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(e.hora || "");
+  const icons = scheduleIcons(html);
+  for (const e of events) e.icon = icons[e.tag] ?? null;
+  const base = scheduleDate(html);
+  let day = 0;
+  let previous = -1;
+  for (const e of events) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(e.time || "");
     if (base === null || !m) continue;
-    const minutos = Number(m[1]) * 60 + Number(m[2]);
-    if (previo >= 0 && minutos < previo) dia++;
-    previo = minutos;
-    e.inicioMs = base + dia * 86400000 + minutos * 60000 - UTC_AGENDA * 3600000;
+    const minutes = Number(m[1]) * 60 + Number(m[2]);
+    if (previous >= 0 && minutes < previous) day++;
+    previous = minutes;
+    e.startMs = base + day * 86400000 + minutes * 60000 - SCHEDULE_UTC * 3600000;
   }
-  return eventos;
+  return events;
 }
 
-// El parámetro `r` del enlace es la URL del embed en base64.
-function decodificarR(href) {
+// The link's `r` parameter is the embed URL in base64.
+function decodeR(href) {
   const m = /[?&]r=([^&"]+)/.exec(href);
   if (!m) return null;
   try {
@@ -624,7 +632,7 @@ function decodificarR(href) {
   }
 }
 
-function limpiar(html) {
+function clean(html) {
   return html
     .replace(/<[^>]*>/g, " ")
     .replace(/&amp;/g, "&")
@@ -633,9 +641,9 @@ function limpiar(html) {
     .trim();
 }
 
-// Ids estables y válidos (^[A-Za-z0-9._~-]{1,128}$) a partir de un texto.
-function hash(texto) {
+// Stable, valid ids (^[A-Za-z0-9._~-]{1,128}$) from a text.
+function hash(text) {
   let h = 5381;
-  for (let i = 0; i < texto.length; i++) h = ((h * 33) ^ texto.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
   return h.toString(36);
 }

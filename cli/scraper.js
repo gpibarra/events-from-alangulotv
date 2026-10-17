@@ -2,52 +2,52 @@ import * as cheerio from 'cheerio';
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; ScraperBasico/1.0)';
 
-export async function obtenerHtml(url, referer) {
+export async function fetchHtml(url, referer) {
   const headers = { 'User-Agent': USER_AGENT };
   if (referer) headers.Referer = referer;
-  const respuesta = await fetch(url, { headers });
-  if (!respuesta.ok) {
-    throw new Error(`Error ${respuesta.status} al pedir ${url}`);
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error(`Error ${response.status} fetching ${url}`);
   }
-  return respuesta.text();
+  return response.text();
 }
 
-// URLs absolutas de los iframes de la página (la agenda se carga dentro de uno).
-export function parsearIframes(html, urlBase) {
+// Absolute URLs of the page's iframes (the schedule loads inside one).
+export function parseIframes(html, baseUrl) {
   const $ = cheerio.load(html);
   return $('iframe[src]')
-    .map((_, el) => new URL($(el).attr('src'), urlBase).href)
+    .map((_, el) => new URL($(el).attr('src'), baseUrl).href)
     .get();
 }
 
-// El parámetro `r` de /eventos.html es la URL del reproductor en base64.
-export function decodificarR(r) {
+// The `r` parameter of /eventos.html is the player URL in base64.
+export function decodeR(r) {
   if (!r) return null;
-  const texto = Buffer.from(r, 'base64').toString('utf8');
-  return URL.canParse(texto) ? texto : null;
+  const text = Buffer.from(r, 'base64').toString('utf8');
+  return URL.canParse(text) ? text : null;
 }
 
-// Enlaces <a> cuyo href empieza con el prefijo indicado, junto con el evento
-// (<li class="TIPO"><a href="#">Evento <span class="t">hora</span></a><ul>...)
-// al que pertenecen.
-export function parsearLinks(html, urlBase, prefijo = '/eventos.html') {
+// <a> links whose href starts with the given prefix, together with the event
+// (<li class="TAG"><a href="#">Event <span class="t">time</span></a><ul>...)
+// they belong to.
+export function parseLinks(html, baseUrl, prefix = '/eventos.html') {
   const $ = cheerio.load(html);
   return $('a[href]')
-    .filter((_, el) => $(el).attr('href').startsWith(prefijo))
+    .filter((_, el) => $(el).attr('href').startsWith(prefix))
     .map((_, el) => {
       const a = $(el);
       const li = a.closest('ul').parent('li');
-      const cabecera = li.children('a').first().clone();
-      const hora = cabecera.find('.t').text().trim();
-      cabecera.find('.t').remove();
-      const url = new URL(a.attr('href'), urlBase);
+      const header = li.children('a').first().clone();
+      const time = header.find('.t').text().trim();
+      header.find('.t').remove();
+      const url = new URL(a.attr('href'), baseUrl);
       return {
-        evento: cabecera.text().replace(/\s+/g, ' ').trim() || null,
-        tipo: li.attr('class') ?? null,
-        hora: hora || null,
-        texto: a.text().replace(/\s+/g, ' ').trim(),
+        name: header.text().replace(/\s+/g, ' ').trim() || null,
+        tag: li.attr('class') ?? null,
+        time: time || null,
+        label: a.text().replace(/\s+/g, ' ').trim(),
         url: url.href,
-        embed: decodificarR(url.searchParams.get('r')),
+        embed: decodeR(url.searchParams.get('r')),
       };
     })
     .get();
