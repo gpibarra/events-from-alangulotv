@@ -251,10 +251,11 @@ test("canal fuera del aire: el m3u8 se comprueba antes de devolverlo y, si no es
   capturas = [];
   await assert.rejects(resolve("https://latamzy.com/global1.php?stream=captura-apagada"), (e) => e.fueraDelAire && /apagado|respondió 404/.test(e.message));
   assert.equal(capturas.length, 1, "el directo no encontró playbackURL y probó el navegador");
-  // un servidor de video no declarado no se puede comprobar: se devuelve igual
+  // un servidor de video que la persona no permitió no se puede comprobar: se devuelve igual
   const sinComprobar = await resolve("https://latamzy.com/global1.php?stream=no-declarado");
   assert.match(sinComprobar.url, /no-declarado/);
-  for (const h of ["fubo18.com", "domhsd.com", "7m12bgo8dx9z.net"]) assert.ok(manifiesto.hosts.includes("*." + h), h);
+  // los servidores de video no se declaran: Kino pregunta por cada uno
+  for (const h of ["fubo18.com", "domhsd.com", "7m12bgo8dx9z.net"]) assert.ok(!manifiesto.hosts.some((d) => d.endsWith(h)), h);
 });
 
 test("resolve: si el método directo falla, cae al navegador y devuelve el m3u8 capturado con sus headers", async () => {

@@ -5,9 +5,9 @@ import { SERVIDORES } from '../plugin.js';
 // - embed: el dominio de cada señal de la agenda. Tiene que tener métodos en EXTRACTORES y estar en "hosts"; si no,
 //   el plugin descarta esa señal ("servidor no soportado"). Es un error.
 // - reproductor: el frame que pidió el m3u8 (el iframe del embed). Los métodos directo y descifrado lo piden con
-//   kino.fetch, así que si cambió de dominio esos métodos fallan y queda el navegador. Es un aviso.
-// - video: el servidor del m3u8. Se usa para comprobar que el canal esté en el aire; si no está en "hosts", el plugin
-//   devuelve el m3u8 sin comprobar. Es un aviso.
+//   kino.fetch; si no está en "hosts", Kino le pregunta a la persona si lo permite. Es un aviso: conviene declararlo.
+// - video: el servidor del m3u8. No se declara a propósito (cambia seguido): Kino pregunta por él al comprobar que el
+//   canal esté en el aire. Solo se lista.
 
 const ENTRADA = process.argv[2] ?? 'output/streams.json';
 const { hosts } = JSON.parse(await readFile(new URL('../kino-plugin.json', import.meta.url), 'utf8'));
@@ -55,15 +55,11 @@ listar('Embeds (servidores de la agenda)', vistos.embed, null, (host) => {
   return msg;
 });
 listar('Reproductores (iframes que piden el m3u8)', vistos.reproductor, null, (host) => {
-  const msg = !declarado(host) ? 'falta en hosts: el método directo no lo alcanza' : null;
+  const msg = !declarado(host) ? 'falta en hosts: Kino le va a preguntar a la persona' : null;
   if (msg) avisos++;
   return msg;
 });
-listar('Servidores de video (m3u8)', vistos.video, null, (host) => {
-  const msg = !declarado(host) ? 'falta en hosts: el plugin no puede comprobar si está en el aire' : null;
-  if (msg) avisos++;
-  return msg;
-});
+listar('Servidores de video (m3u8, Kino pregunta por ellos)', vistos.video, null, () => null);
 
 const sinStream = streams.filter((s) => !s.stream).length;
 console.log(`\n${streams.length} señales, ${sinStream} sin m3u8 en Chrome.`);

@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Debe coincidir con "version" de kino-plugin.json (un test lo comprueba). Se escribe en el log de
 // cada resolve para saber con certeza qué versión corre en el aparato: Kino no la imprime.
-export const VERSION = "0.7.9";
+export const VERSION = "0.7.10";
 const AGENDA = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Inicio es una sola fila "Todos" (Kino admite 20 filas de 60 ítems) y En vivo tiene la categoría "Todos".
@@ -446,7 +446,8 @@ function extraerPlayback(urlDe, headers = {}) {
 // navegador oculto también la "captura" aunque no responda. Kino reintenta ese m3u8 sin pasar a otra señal, así que
 // se pide la lista antes de devolverla: si responde un error, no contesta a tiempo o no es una lista HLS, el canal está
 // fuera del aire y se pasa directo a la siguiente señal (sin probar otro método de ese servidor, que vería el mismo
-// canal). Solo se puede pedir a un host del manifiesto; si el servidor de video es otro, se devuelve sin comprobar.
+// canal). Los servidores de video no están en el manifiesto (cambian seguido): Kino le pregunta a la persona si
+// permite cada uno, y si no lo permite el m3u8 se devuelve sin comprobar.
 async function comprobarEnElAire({ url, headers }) {
   const host = new URL(url).hostname;
   const fueraDelAire = (motivo) => {
@@ -459,7 +460,7 @@ async function comprobarEnElAire({ url, headers }) {
     r = await kino.fetch(url, { headers, timeoutMs: 8000 });
   } catch (e) {
     if (e.code === "host_not_allowed") {
-      kino.log("m3u8 sin comprobar (host no declarado)", host);
+      kino.log("m3u8 sin comprobar (host no permitido)", host);
       return;
     }
     throw fueraDelAire("no respondió (" + (e.code || e.message) + ")");

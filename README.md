@@ -24,7 +24,7 @@ npm run hosts                    # compara los dominios de output/streams.json c
 npm run all                      # schedule + streams + hosts
 ```
 
-`npm run hosts` revisa tres cosas: que cada servidor de la agenda (embed) tenga métodos en `EXTRACTORES` y esté en `hosts` (si no, es un error y termina con código 1); que el reproductor (el iframe que pide el m3u8) esté en `hosts`, porque si no el método directo no lo alcanza; y que el servidor de video también lo esté, para poder comprobar si el canal está en el aire. Ojo: que Chrome encuentre un m3u8 no significa que el canal esté transmitiendo, porque la captura toma la petición aunque responda 404.
+`npm run hosts` revisa tres cosas: que cada servidor de la agenda (embed) tenga métodos en `EXTRACTORES` y esté en `hosts` (si no, es un error y termina con código 1); que el reproductor (el iframe que pide el m3u8) esté en `hosts`, porque si no Kino le pregunta a la persona si lo permite. Los servidores de video solo se listan: no se declaran a propósito. Ojo: que Chrome encuentre un m3u8 no significa que el canal esté transmitiendo, porque la captura toma la petición aunque responda 404.
 
 ## Plugin de Kino
 
@@ -44,17 +44,19 @@ Cada dominio de embed tiene en `EXTRACTORES` (`plugin.js`) una **lista de métod
 
 | Embed | Métodos | Cómo |
 |---|---|---|
-| `spf24live.st` | descifrado | Lee con `kino.fetch` el iframe de `missflight.net` (Referer `spf24live.st`, User-Agent de Chrome) y descifra el m3u8 de `window._econfig`. El navegador oculto no sirve: `missflight.net` rechaza el User-Agent del WebView de Android (`; wv`). |
+| `spf24live.st` | descifrado | Lee con `kino.fetch` el iframe del reproductor (`missflight.net`, ahora `tossequip.net`; Referer `spf24live.st`, User-Agent de Chrome) y descifra el m3u8 de `window._econfig`. El navegador oculto no sirve: el reproductor rechaza el User-Agent del WebView de Android (`; wv`). |
 | `latamzy.com` | directo, navegador | Directo: el reproductor `streamtp99a.sbs/global1.php?stream=…` trae el m3u8 en texto plano (`playbackURL`). |
 | `sudamericafy.com` | directo, navegador | Directo: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`). |
 
 El método «navegador» usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
 
-Todos los métodos, también el navegador, **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), el navegador la «captura» aunque no responda, y Kino reintentaría ese m3u8 sin pasar a otra señal. Si responde un error, no contesta en 8 s o no es una lista HLS, la señal se descarta (sin probar otro método de ese servidor, que vería el mismo canal apagado) y se prueba la siguiente. Para eso los servidores de video (`*.fubo18.com`, `*.domhsd.com`, `*.7m12bgo8dx9z.net`) están en `hosts`; si uno cambia de dominio, el m3u8 se devuelve sin comprobar.
+Todos los métodos, también el navegador, **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), el navegador la «captura» aunque no responda, y Kino reintentaría ese m3u8 sin pasar a otra señal. Si responde un error, no contesta en 8 s o no es una lista HLS, la señal se descarta (sin probar otro método de ese servidor, que vería el mismo canal apagado) y se prueba la siguiente. Los servidores de video (`*.fubo18.com`, `*.domhsd.com`…) cambian seguido, así que no están en `hosts`: reproducirlos no lo necesita (`"streamHosts": "any"`), y para la comprobación Kino le pregunta a la persona si permite cada uno (hasta 3 preguntas por llamada). Si no lo permite, el m3u8 se devuelve sin comprobar.
 
 latamzy y sudamericafy arman el iframe con un script ofuscado, así que el dominio del reproductor está escrito en el plugin. Si cambia, el método directo falla y queda el navegador.
 
-**Un servidor nuevo** (un dominio que no está en `EXTRACTORES`) no se puede abrir: `kino.fetch` y `kino.browser.capture` solo arrancan en los `hosts` del manifiesto. El plugin descarta esa señal sin intentarla, escribe `servidor no soportado: <dominio>` en el log y prueba la siguiente. Si todas las señales del evento son de servidores desconocidos, la persona ve «Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.» (con el «Modo debug» del plugin activado, Kino guarda ese registro y permite compartirlo). Para sumarlo hay que agregar sus métodos en `EXTRACTORES` y su host en `hosts` (un test exige que coincidan), subir la versión y aprobar la actualización en Kino (Ajustes ▸ Plugins), porque Kino no instala solo una versión que amplía `hosts`.
+**Un dominio no declarado** que pide `kino.fetch` (un reproductor que cambió, como el iframe de spf24live, que pasó de `missflight.net` a `tossequip.net`) no rompe nada: Kino le pregunta a la persona si lo permite. El kit de Node no simula esa pregunta y responde `host_not_allowed`.
+
+**Un servidor nuevo** (un dominio de embed que no está en `EXTRACTORES`) no se puede abrir: el plugin no sabe cómo sacar su m3u8, y `kino.browser.capture` solo arranca en los `hosts` del manifiesto. El plugin descarta esa señal sin intentarla, escribe `servidor no soportado: <dominio>` en el log y prueba la siguiente. Si todas las señales del evento son de servidores desconocidos, la persona ve «Este evento usa un servidor que el plugin todavía no conoce. Avisa al autor y comparte el registro del modo debug.» (con el «Modo debug» del plugin activado, Kino guarda ese registro y permite compartirlo). Para sumarlo hay que agregar sus métodos en `EXTRACTORES` y su host en `hosts` (un test exige que coincidan), subir la versión y aprobar la actualización en Kino (Ajustes ▸ Plugins), porque Kino no instala solo una versión que amplía `hosts`.
 
 `kino.browser.capture` solo funciona dentro de la app; el kit de Node lo simula en los tests.
 

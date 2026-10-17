@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.7.9",
+  "version": "0.7.10",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -19,13 +19,7 @@
     "streamtp99a.sbs",
     "*.streamtp99a.sbs",
     "la18hd.su",
-    "*.la18hd.su",
-    "fubo18.com",
-    "*.fubo18.com",
-    "domhsd.com",
-    "*.domhsd.com",
-    "7m12bgo8dx9z.net",
-    "*.7m12bgo8dx9z.net"
+    "*.la18hd.su"
   ],
   "capabilities": [
     "home",
