@@ -46,7 +46,9 @@ Cada dominio de embed tiene en `EXTRACTORS` (`plugin.js`) una **lista de método
 |---|---|---|
 | `spf24live.st` | `decrypt` | Lee con `kino.fetch` el iframe del reproductor (`missflight.net`, ahora `tossequip.net`; Referer `spf24live.st`, User-Agent de Chrome) y descifra el m3u8 de `window._econfig`. El navegador oculto no sirve: el reproductor rechaza el User-Agent del WebView de Android (`; wv`). |
 | `latamzy.com` | `direct`, `browser` | `direct`: el reproductor `streamtp99a.sbs/global1.php?stream=…` trae el m3u8 en texto plano (`playbackURL`). |
-| `sudamericafy.com` | `direct`, `browser` | `direct`: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`). |
+| `sudamericafy.com` | `direct`, `browser` | `direct`: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`); desde octubre de 2026 trae el m3u8 en `window.CDNPEER = {"src": …}`. |
+| `streamtp99a.sbs` | `direct`, `browser` | Desde octubre de 2026 la agenda enlaza el reproductor directamente: el embed ya es el reproductor. |
+| `la18hd.su` | `direct`, `browser` | Igual que el anterior. Algunos proveedores (por ejemplo, en Argentina) bloquean su DNS: si no resuelve, la señal falla y se prueba la siguiente; con DNS privado (1.1.1.1) funciona. |
 
 El método `browser` usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
 

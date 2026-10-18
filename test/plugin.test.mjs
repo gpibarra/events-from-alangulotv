@@ -47,10 +47,13 @@ globalThis.kino = {
     }
     if (url.startsWith("https://streamtp99a.sbs/") || url.startsWith("https://la18hd.su/")) {
       // Only the "directo" stream has playbackURL; the others fall back to the hidden browser.
+      // "cdnpeer" carries it as window.CDNPEER.src, like la18hd.su since October 2026.
       const stream = new URL(url).searchParams.get("stream");
       const html = ["directo", "apagado", "no-declarado", "lento"].includes(stream)
         ? `var playbackURL = "https:\\/\\/99.cdn.example:443\\/global\\/${stream}\\/index.m3u8?token=t&ip=1.2.3.4";`
-        : "<html></html>";
+        : stream === "cdnpeer"
+          ? `<script>window.CDNPEER = {"src":"https://abc.cdn.example:443/espn2/mono.m3u8?token=t","swarm":"x","trackers":["wss://t.example"]};</script>`
+          : "<html></html>";
       return { ok: true, status: 200, text: () => html };
     }
     if (url.startsWith("https://missflight.net/")) {
@@ -230,6 +233,22 @@ test("direct resolve: latamzy and sudamericafy go to the player without the brow
     assert.ok(manifest.hosts.includes(host) && manifest.hosts.includes("*." + host), host + " missing from hosts");
   }
   assert.equal(requests[0].options.headers["Sec-Fetch-Dest"], "iframe"); // la18hd.su only answers an iframe
+});
+
+test("direct resolve: when the schedule links the player itself (streamtp99a.sbs, la18hd.su) it is fetched as is", async () => {
+  for (const [embed, m3u8] of [
+    ["https://streamtp99a.sbs/global1.php?stream=directo", "https://99.cdn.example:443/global/directo/index.m3u8?token=t&ip=1.2.3.4"],
+    ["https://la18hd.su/vivo/canales.php?stream=cdnpeer", "https://abc.cdn.example:443/espn2/mono.m3u8?token=t"],
+  ]) {
+    captures = [];
+    requests.length = 0;
+    const s = await resolve(embed);
+    assert.equal(captures.length, 0, embed);
+    assert.equal(s.url, m3u8);
+    assert.equal(requests[0].url, embed);
+  }
+  assert.equal(requests[0].options.headers["Sec-Fetch-Dest"], "iframe");
+  assert.equal(requests[0].options.headers.Referer, BASE + "/");
 });
 
 test("channel off air: the m3u8 is checked before returning it and, if it is not a playlist, the next signal is tried", async () => {

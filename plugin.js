@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Must match "version" in kino-plugin.json (a test checks it). It is written to the log on every
 // resolve to know for sure which version runs on the device: Kino does not print it.
-export const VERSION = "0.8.0";
+export const VERSION = "0.8.1";
 const SCHEDULE_URL = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Home is a single "Todos" row (Kino allows 20 rows of 60 items) and Live has the "Todos" category.
@@ -89,18 +89,22 @@ const EXTRACTORS = {
   // config is decrypted.
   "spf24live.st": [method("decrypt", extractSpf24)],
   // latamzy.com and sudamericafy.com build, with an obfuscated script, an iframe to a player that has the m3u8 in
-  // plain text (`playbackURL`). We go straight to that player; if its domain changed, the hidden browser remains.
+  // plain text. We go straight to that player; if its domain changed, the hidden browser remains.
   "latamzy.com": [
     method("direct", extractPlayback((stream) => "https://streamtp99a.sbs/global1.php?stream=" + stream)),
     method("browser", extractByNetwork({ referer: BASE + "/" })),
   ],
   "sudamericafy.com": [
-    method("direct", extractPlayback((stream) => "https://la18hd.su/vivo/canales.php?stream=" + stream, {
-      Referer: "https://sudamericafy.com/", // la18hd.su only answers a load that looks like an iframe
-      "Sec-Fetch-Dest": "iframe",
-      "Sec-Fetch-Mode": "navigate",
-      "Sec-Fetch-Site": "cross-site",
-    })),
+    method("direct", extractPlayback((stream) => "https://la18hd.su/vivo/canales.php?stream=" + stream, la18hdHeaders("https://sudamericafy.com/"))),
+    method("browser", extractByNetwork({ referer: BASE + "/" })),
+  ],
+  // Since October 2026 the schedule links those players directly: the embed is already the player.
+  "streamtp99a.sbs": [
+    method("direct", extractPlayback((stream, embed) => embed)),
+    method("browser", extractByNetwork({ referer: BASE + "/" })),
+  ],
+  "la18hd.su": [
+    method("direct", extractPlayback((stream, embed) => embed, la18hdHeaders(BASE + "/"))),
     method("browser", extractByNetwork({ referer: BASE + "/" })),
   ],
 };
@@ -435,18 +439,26 @@ async function resolveSignal(ref) {
   throw last;
 }
 
-// "direct" method: some servers' player has the m3u8 in plain text (`var playbackURL = "…"`).
-// `playerUrl` builds the player's address from the embed's `stream` parameter.
+// la18hd.su only answers (403 otherwise) a load that looks like an iframe.
+function la18hdHeaders(referer) {
+  return { Referer: referer, "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site" };
+}
+
+// "direct" method: some servers' player has the m3u8 in plain text, as `var playbackURL = "…"` or as
+// `window.CDNPEER = {"src":"…"}` (la18hd.su since October 2026).
+// `playerUrl(stream, embed)` builds the player's address from the embed's `stream` parameter.
 const MOBILE_CHROME_UA = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
+const PLAYBACK_PATTERNS = [/playbackURL\s*=\s*["']([^"']+)["']/, /CDNPEER\s*=\s*\{[^<]*?"src"\s*:\s*"([^"]+)"/];
 
 function extractPlayback(playerUrl, headers = {}) {
   return async (embed) => {
     const stream = new URL(embed).searchParams.get("stream");
     if (!stream) throw kino.error("not_found", "embed has no stream parameter");
-    const player = playerUrl(stream);
+    const player = playerUrl(stream, embed);
     const r = await kino.fetch(player, { headers: { "User-Agent": MOBILE_CHROME_UA, ...headers } });
     if (!r.ok) throw kino.error("unavailable", new URL(player).hostname + " responded " + r.status);
-    const url = /playbackURL\s*=\s*["']([^"']+)["']/.exec(await r.text())?.[1]?.replace(/\\\//g, "/");
+    const html = await r.text();
+    const url = PLAYBACK_PATTERNS.map((p) => p.exec(html)?.[1]).find(Boolean)?.replace(/\\\//g, "/");
     if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", new URL(player).hostname + " has no playbackURL");
     const result = { url, mime: MIME_HLS, headers: { "User-Agent": MOBILE_CHROME_UA } };
     await checkOnAir(result);
