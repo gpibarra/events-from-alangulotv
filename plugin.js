@@ -8,7 +8,7 @@
 export const BASE = "https://alangulotv.sx";
 // Must match "version" in kino-plugin.json (a test checks it). It is written to the log on every
 // resolve to know for sure which version runs on the device: Kino does not print it.
-export const VERSION = "0.8.1";
+export const VERSION = "0.8.2";
 const SCHEDULE_URL = BASE + "/agenda.php";
 const MIME_HLS = "application/vnd.apple.mpegurl";
 // Home is a single "Todos" row (Kino allows 20 rows of 60 items) and Live has the "Todos" category.
@@ -88,6 +88,8 @@ const EXTRACTORS = {
   // with "domain protected", so the hidden browser never works. It is read with kino.fetch and the player's
   // config is decrypted.
   "spf24live.st": [method("decrypt", extractSpf24)],
+  // vivolatam1.com (October 2026): same page and player as spf24live, with the iframe on traitaunt.net.
+  "vivolatam1.com": [method("decrypt", extractSpf24)],
   // latamzy.com and sudamericafy.com build, with an obfuscated script, an iframe to a player that has the m3u8 in
   // plain text. We go straight to that player; if its domain changed, the hidden browser remains.
   "latamzy.com": [
@@ -433,7 +435,7 @@ async function resolveSignal(ref) {
     } catch (e) {
       kino.log("method failed", embed.hostname, name, e.code, e.message);
       last = e;
-      if (e.offAir) break;
+      if (e.offAir || e.unreachable) break;
     }
   }
   throw last;
@@ -455,7 +457,15 @@ function extractPlayback(playerUrl, headers = {}) {
     const stream = new URL(embed).searchParams.get("stream");
     if (!stream) throw kino.error("not_found", "embed has no stream parameter");
     const player = playerUrl(stream, embed);
-    const r = await kino.fetch(player, { headers: { "User-Agent": MOBILE_CHROME_UA, ...headers } });
+    let r;
+    try {
+      r = await kino.fetch(player, { headers: { "User-Agent": MOBILE_CHROME_UA, ...headers } });
+    } catch (e) {
+      // If the player is the embed itself and it does not connect, the hidden browser would wait for the same host
+      // (another 15 s): the next signal is tried right away.
+      if (new URL(player).hostname === new URL(embed).hostname && ["timeout", "network"].includes(e.code)) e.unreachable = true;
+      throw e;
+    }
     if (!r.ok) throw kino.error("unavailable", new URL(player).hostname + " responded " + r.status);
     const html = await r.text();
     const url = PLAYBACK_PATTERNS.map((p) => p.exec(html)?.[1]).find(Boolean)?.replace(/\\\//g, "/");
@@ -493,8 +503,8 @@ async function checkOnAir({ url, headers }) {
   if (!playlist.trimStart().startsWith("#EXTM3U")) throw offAir("responded " + r.status);
 }
 
-// "decrypt" method (spf24live): the page only has an iframe to the player (missflight.net, now tossequip.net), which
-// serves it if the Referer is spf24live.st and the User-Agent is Chrome's (not a WebView). The iframe keeps the m3u8 in
+// "decrypt" method (spf24live, vivolatam1): the page only has an iframe to the player (missflight.net, tossequip.net,
+// traitaunt.net…), which serves it if the Referer is the page's domain and the User-Agent is Chrome's (not a WebView). The iframe keeps the m3u8 in
 // window._econfig: base64 of four equal chunks, each base64 with a padding character at position 3, which joined
 // in the order 1, 3, 0, 2 are the base64 of a JSON with `stream_url`. The segments require the iframe's Referer.
 const ECONFIG_ORDER = [1, 3, 0, 2];
@@ -518,8 +528,8 @@ async function extractSpf24(embed) {
   };
   const page = await get(embed, BASE + "/");
   const iframe = /<iframe[^>]+src=["'](https:\/\/[^"']+)["']/i.exec(page)?.[1];
-  if (!iframe) throw kino.error("not_found", "spf24live has no iframe");
-  const player = await get(iframe, "https://spf24live.st/");
+  if (!iframe) throw kino.error("not_found", new URL(embed).hostname + " has no iframe");
+  const player = await get(iframe, new URL(embed).origin + "/");
   const econfig = /_econfig\s*=\s*["']([A-Za-z0-9+/=]+)["']/.exec(player)?.[1];
   if (!econfig) throw kino.error("not_found", "iframe has no config (" + new URL(iframe).hostname + ")");
   let config;
@@ -532,7 +542,7 @@ async function extractSpf24(embed) {
   if (!/^https:\/\//.test(url ?? "")) throw kino.error("not_found", "config has no stream_url");
   const stream = { url, mime: MIME_HLS, headers: { Referer: new URL(iframe).origin + "/", "User-Agent": MOBILE_CHROME_UA } };
   await checkOnAir(stream);
-  kino.log("spf24live ok", new URL(iframe).hostname, new URL(url).hostname);
+  kino.log("decrypt ok", new URL(iframe).hostname, new URL(url).hostname);
   return stream;
 }
 

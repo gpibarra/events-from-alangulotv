@@ -1,7 +1,7 @@
 {
   "id": "events-from-alangulotv",
   "name": "Eventos de AlAnguloTV",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "apiVersion": 6,
   "entry": "plugin.js",
   "description": "Eventos deportivos en vivo de la agenda de alangulotv",
@@ -21,7 +21,11 @@
     "streamtp99a.sbs",
     "*.streamtp99a.sbs",
     "la18hd.su",
-    "*.la18hd.su"
+    "*.la18hd.su",
+    "vivolatam1.com",
+    "*.vivolatam1.com",
+    "traitaunt.net",
+    "*.traitaunt.net"
   ],
   "capabilities": [
     "home",
@@ -33,7 +37,7 @@
   "categories": [
     "live"
   ],
-  "discoverable": false,
+  "discoverable": true,
   "color": "#FFB020",
   "icon": "icon.png",
   "settings": [

@@ -45,12 +45,15 @@ Cada dominio de embed tiene en `EXTRACTORS` (`plugin.js`) una **lista de método
 | Embed | Métodos | Cómo |
 |---|---|---|
 | `spf24live.st` | `decrypt` | Lee con `kino.fetch` el iframe del reproductor (`missflight.net`, ahora `tossequip.net`; Referer `spf24live.st`, User-Agent de Chrome) y descifra el m3u8 de `window._econfig`. El navegador oculto no sirve: el reproductor rechaza el User-Agent del WebView de Android (`; wv`). |
+| `vivolatam1.com` | `decrypt` | Desde octubre de 2026 reemplaza a `spf24live.st`: la misma página y el mismo reproductor, con el iframe en `traitaunt.net`. El Referer del iframe es el dominio de la página. |
 | `latamzy.com` | `direct`, `browser` | `direct`: el reproductor `streamtp99a.sbs/global1.php?stream=…` trae el m3u8 en texto plano (`playbackURL`). |
 | `sudamericafy.com` | `direct`, `browser` | `direct`: el reproductor `la18hd.su/vivo/canales.php?stream=…`, que solo responde a una carga que parece un iframe (`Sec-Fetch-Dest: iframe`); desde octubre de 2026 trae el m3u8 en `window.CDNPEER = {"src": …}`. |
 | `streamtp99a.sbs` | `direct`, `browser` | Desde octubre de 2026 la agenda enlaza el reproductor directamente: el embed ya es el reproductor. |
 | `la18hd.su` | `direct`, `browser` | Igual que el anterior. Algunos proveedores (por ejemplo, en Argentina) bloquean su DNS: si no resuelve, la señal falla y se prueba la siguiente; con DNS privado (1.1.1.1) funciona. |
 
 El método `browser` usa `kino.browser.capture`: abre el embed en el WebView oculto y toma la petición `.m3u8`.
+
+Si `direct` no logra conectarse con un servidor cuyo embed ya es el reproductor (`streamtp99a.sbs`, `la18hd.su`), no se prueba `browser`, que esperaría al mismo host otros 15 s: se pasa a la siguiente señal.
 
 Todos los métodos, también `browser`, **piden el m3u8 antes de devolverlo**: los reproductores entregan la URL aunque el canal esté fuera del aire (antes de un partido, por ejemplo), el navegador la «captura» aunque no responda, y Kino reintentaría ese m3u8 sin pasar a otra señal. Si responde un error, no contesta en 8 s o no es una lista HLS, la señal se descarta (sin probar otro método de ese servidor, que vería el mismo canal apagado) y se prueba la siguiente. Los servidores de video (`*.fubo18.com`, `*.domhsd.com`…) cambian seguido, así que no están en `hosts`: reproducirlos no lo necesita (`"streamHosts": "any"`), y para la comprobación Kino le pregunta a la persona si permite cada uno (hasta 3 preguntas por llamada). Si no lo permite, el m3u8 se devuelve sin comprobar.
 

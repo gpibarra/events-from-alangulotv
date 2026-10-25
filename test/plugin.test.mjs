@@ -36,6 +36,13 @@ globalThis.kino = {
   error: (code, message, options) => Object.assign(new Error(message), { code, options }),
   fetch: async (url, options) => {
     requests.push({ url, options });
+    if (url.startsWith("https://streamtp99a.sbs/") && url.includes("caido")) throw Object.assign(new Error("connect failed"), { code: "timeout" });
+    if (url.startsWith("https://vivolatam1.com/")) {
+      return { ok: true, status: 200, text: () => `<iframe src="https://traitaunt.net/e/xyz" width="100%"></iframe>` };
+    }
+    if (url.startsWith("https://traitaunt.net/")) {
+      return { ok: true, status: 200, text: () => `<script>window._econfig='${encryptEconfig({ stream_url: "https://c089pa.ejemplo.net:8443/hls/v.m3u8?s=t" })}';</script>` };
+    }
     if (url.startsWith("https://spf24live.st/")) {
       return { ok: true, status: 200, text: () => (url.includes("sin-iframe") ? "<html></html>" : `<iframe src="https://missflight.net/e/${url.includes("apagado") ? "apagado" : "abc123"}" width="100%"></iframe>`) };
     }
@@ -324,6 +331,27 @@ test("resolve: spf24live.st without the browser, reads the iframe with a Chrome 
   assert.equal(iframe.options.headers.Referer, "https://spf24live.st/");
   assert.doesNotMatch(iframe.options.headers["User-Agent"], /; wv\)/);
   for (const h of ["missflight.net", "*.missflight.net"]) assert.ok(manifest.hosts.includes(h), h);
+});
+
+test("resolve: vivolatam1.com is read like spf24live, with its own domain as the iframe's Referer", async () => {
+  captures = [];
+  requests.length = 0;
+  const s = await resolve("https://vivolatam1.com/channels/espnpremium.php");
+  assert.equal(captures.length, 0);
+  assert.equal(s.url, "https://c089pa.ejemplo.net:8443/hls/v.m3u8?s=t");
+  assert.equal(s.headers.Referer, "https://traitaunt.net/");
+  assert.equal(requests.find((p) => p.url.startsWith("https://traitaunt.net/")).options.headers.Referer, "https://vivolatam1.com/");
+  for (const h of ["vivolatam1.com", "*.vivolatam1.com", "traitaunt.net", "*.traitaunt.net"]) assert.ok(manifest.hosts.includes(h), h);
+});
+
+test("resolve: if the player is the embed and it does not connect, the browser is not tried (it would wait for the same host)", async () => {
+  captures = [];
+  await assert.rejects(resolve("https://streamtp99a.sbs/global1.php?stream=caido"), (e) => e.code === "timeout" && e.unreachable);
+  assert.equal(captures.length, 0);
+  const ref = "ev:" + JSON.stringify([{ n: "Caída", e: "https://streamtp99a.sbs/global1.php?stream=caido" }, { n: "Buena", e: "https://streamtp99a.sbs/global1.php?stream=directo" }]);
+  const s = await resolve(ref);
+  assert.equal(s.url, "https://99.cdn.example:443/global/directo/index.m3u8?token=t&ip=1.2.3.4");
+  assert.equal(captures.length, 0);
 });
 
 test("resolve: spf24live.st without iframe answers not_found", async () => {
